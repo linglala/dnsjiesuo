@@ -10,21 +10,7 @@ COREFILE = os.environ.get("COREFILE", "/etc/coredns/Corefile")
 INTERVAL = int(os.environ.get("INTERVAL", "30"))
 
 # ChatGPT 解锁域名 (正则,匹配主域+所有子域)
-DOMAINS = [
-    # ---- ChatGPT ----
-    r"(.*\.)?(chatgpt|openai|chat|sora|oaistatsig|oaiusercontent|oaistatic|crixet)\.com\.?",
-    r"(.*\.)?openaicom\.imgix\.net\.?",
-    r"(.*\.)?arkoselabs\.com\.?",
-    r"(.*\.)?(chatgpt|host|turn)\.livekit\.cloud\.?",
-    r"(.*\.)?webpubsub\.azure\.com\.?",
-    # ---- Gemini (必须连 Google 搜索一起解锁,否则区域不一致仍提示不支持) ----
-    r"(.*\.)?gemini\.google\.com\.?",                  # Gemini 主站
-    r"(.*\.)?generativelanguage\.googleapis\.com\.?",  # Gemini API
-    r"(.*\.)?alkalicore\.googleapis\.com\.?",          # Gemini App 后端
-    r"www\.google\.com\.?",                             # 谷歌搜索(关键!与Gemini同区域)
-    r"google\.com\.?",                                   # 谷歌主域
-    r"(.*\.)?ogs\.google\.com\.?",                     # 搜索内嵌资源
-]
+DOMAINS = ['(.*\\.)?(chatgpt|openai|chat|sora|oaistatsig|oaiusercontent|oaistatic|crixet)\\.com\\.?', '(.*\\.)?openaicom\\.imgix\\.net\\.?', '(.*\\.)?arkoselabs\\.com\\.?', '(.*\\.)?(chatgpt|host|turn)\\.livekit\\.cloud\\.?', '(.*\\.)?webpubsub\\.azure\\.com\\.?', '(.*\\.)?gemini\\.google\\.com\\.?', '(.*\\.)?generativelanguage\\.googleapis\\.com\\.?', '(.*\\.)?alkalicore\\.googleapis\\.com\\.?', '(.*\\.)?(jnn-pa|alkalicore|waa-pa\\.clients6)\\.googleapis\\.com\\.?', '(.*\\.)?apis\\.google\\.com\\.?', 'www\\.google\\.com\\.?', 'google\\.com\\.?', '(.*\\.)?ogs\\.google\\.com\\.?']
 
 COREFILE_TPL = ''':53 {
     reload
