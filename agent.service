@@ -1,0 +1,14 @@
+[Unit]
+Description=DNS Unlock Agent
+After=network.target
+
+[Service]
+Environment=PANEL_URL=http://面板IP:8080
+Environment=NODE_TOKEN=面板生成的Token
+Environment=NODE_NAME=dns-节点名
+ExecStart=/usr/bin/python3 /etc/dnspanel/agent.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

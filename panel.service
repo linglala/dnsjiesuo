@@ -1,0 +1,13 @@
+[Unit]
+Description=DNS Unlock Panel
+After=network.target
+
+[Service]
+Environment=ADMIN_PASS=改成强密码
+ExecStart=/usr/bin/python3 -m uvicorn panel:app --host 0.0.0.0 --port 8080 --app-dir /etc/dnspanel
+WorkingDirectory=/etc/dnspanel
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

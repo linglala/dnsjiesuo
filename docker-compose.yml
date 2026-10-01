@@ -1,0 +1,10 @@
+# 每台 DNS 机器上: mkdir -p /etc/coredns && 保存为 docker-compose.yml,然后 docker compose up -d
+services:
+  coredns:
+    image: coredns/coredns:latest
+    container_name: coredns
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /etc/coredns/Corefile:/etc/coredns/Corefile
+    command: ["-conf", "/etc/coredns/Corefile"]
