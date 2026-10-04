@@ -14,6 +14,10 @@ DEFAULT_DOMAINS = ['chatgpt.com', 'openai.com', 'chat.com', 'sora.com', 'oaistat
 
 SERVICES = [("dns", "DNS规则"), ("netflix", "奈飞"), ("youtube", "YouTube"), ("chatgpt", "ChatGPT"), ("gemini", "Gemini"), ("disney", "Disney+")]
 
+def cst(ts):
+    """UTC+8 显示"""
+    return time.strftime("%m-%d %H:%M", time.gmtime(ts + 8*3600)) if ts else "-"
+
 def db():
     c = sqlite3.connect(DB); c.row_factory = sqlite3.Row; return c
 
@@ -33,7 +37,7 @@ def init():
     CREATE TABLE IF NOT EXISTS node_checks(node_id INTEGER PRIMARY KEY,
         data TEXT, ts REAL DEFAULT 0);
     """)
-    for col in ("ips", "domains"):
+    for col in ("ips", "domains", "note"):
         try:
             c.execute("ALTER TABLE nodes ADD COLUMN %s TEXT DEFAULT ''" % col)
         except Exception:
@@ -250,7 +254,7 @@ def index(request: Request):
                 tds += "<td><span class='svc bad' title='%s'>%s ✗</span></td>" % (html.escape(detail), label)
         ck_rows += "<tr><td><b>%s</b></td>%s<td class=mono>%s</td></tr>" % (
             html.escape(n["name"]), tds,
-            time.strftime("%H:%M", time.localtime(ts)) if ts else "-")
+            cst(ts))
     if not nodes:
         ck_rows = "<tr><td colspan=8 class=muted>暂无节点</td></tr>"
     # 节点表
@@ -264,17 +268,23 @@ def index(request: Request):
         used = ((n["rx"]-(t["rx"] if t else 0))+(n["tx"]-(t["tx"] if t else 0)))/1e9 if n["last_seen"] else 0
         total = (n["rx"]+n["tx"])/1e9
         badge = "<span class=badge on>在线</span>" if on else "<span class=badge off>离线</span>"
-        ls = time.strftime("%m-%d %H:%M:%S", time.localtime(n["last_seen"])) if n["last_seen"] else "-"
+        ls = cst(n["last_seen"])
         panel_addr = host if host.startswith("http") else "http://" + host
         install_cmd = "curl -fsSL https://raw.githubusercontent.com/linglala/dnsjiesuo/main/install.sh | bash -s -- %s %s %s" % (
             n["token"], html.escape(panel_addr), html.escape(n["name"]))
         nips = set((n["ips"] or "").split(",")) if n["ips"] else set()
-        ipshow = "<br>".join(html.escape(i) for i in sorted(nips)) if nips else "<span class=warn>未上报</span>"
+        pub = [i for i in sorted(nips) if i not in ("127.0.0.1", "::1")]
+        ipshow = "<br>".join(html.escape(i) for i in pub) if pub else "<span class=warn>未上报</span>"
+        note = (n["note"] or "").strip()
+        nameshow = html.escape(n["name"]) + ("<br><span class=muted style=\"font-size:12px\">📌 %s</span>" % html.escape(note) if note else "")
         rows += ("<tr><td>%d</td><td>%s</td><td class=mono>%s…</td><td class=mono>%s</td><td>%s</td><td class=mono>%s</td>"
                  "<td>%.2f GB</td><td>%.2f GB</td>"
                  "<td><a href=/del_node/%d onclick=\"return confirm('删除该节点?')\">删除</a></td></tr>"
-                 "<tr><td></td><td colspan=8><button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this)>📋 复制一键安装命令</button> <span class=muted>所有节点共用上方解锁域名名单,各自回答自己的公网IP</span></td></tr>"
-                 % (n["id"], html.escape(n["name"]), n["token"][:8], ipshow, badge, ls, used, total, n["id"], html.escape(install_cmd, quote=True)))
+                 "<tr><td></td><td colspan=8><button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this)>📋 复制一键安装命令</button> "
+                 "<form method=post action=/set_node_note/%d style=\"display:inline;margin-left:12px\"><input name=note value=\"%s\" placeholder=\"备注:用途/负责域名等\" style=\"width:240px;padding:4px 8px\"><button class=ghost style=\"padding:4px 10px\">保存备注</button></form> "
+                 "%s</td></tr>"
+                 % (n["id"], nameshow, n["token"][:8], ipshow, badge, ls, used, total, n["id"], html.escape(install_cmd, quote=True), n["id"], html.escape(note, quote=True),
+                    ("<button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this) style=\"margin-left:6px\">📋 复制备注</button>" % html.escape(note, quote=True)) if note else ""))
     wlrows = "".join("<tr><td class=mono>%s</td><td>%s</td><td><a href=/del_wl/%d onclick=\"return confirm('删除?')\">删除</a></td></tr>"
                      % (html.escape(w["ip"]), html.escape(w["note"] or "-"), w["id"]) for w in wl)
     wlwarn = ""
@@ -327,6 +337,12 @@ def set_node_domains(request: Request, nid: int, domains: str = Form(...)):
     if logged(request):
         lines = [l.strip() for l in domains.replace("\r", "").split("\n") if l.strip()]
         c = db(); c.execute("UPDATE nodes SET domains=? WHERE id=?", ("\n".join(lines), nid)); c.commit(); c.close()
+    return RedirectResponse("/", 302)
+
+@app.post("/set_node_note/{nid}")
+def set_node_note(request: Request, nid: int, note: str = Form(...)):
+    if logged(request):
+        c = db(); c.execute("UPDATE nodes SET note=? WHERE id=?", (note.strip()[:500], nid)); c.commit(); c.close()
     return RedirectResponse("/", 302)
 
 @app.post("/add_node")
