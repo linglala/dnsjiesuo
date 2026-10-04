@@ -12,7 +12,7 @@ CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "600"))
 DOMAINS = ['chatgpt.com', 'openai.com', 'chat.com', 'sora.com', 'oaistatsig.com', 'oaiusercontent.com', 'oaistatic.com', 'crixet.com', 'openaicom.imgix.net', 'arkoselabs.com', 'chatgpt.livekit.cloud', 'host.livekit.cloud', 'turn.livekit.cloud', 'webpubsub.azure.com', 'gemini.google.com', 'generativelanguage.googleapis.com', 'alkalicore.googleapis.com', 'jnn-pa.googleapis.com', 'waa-pa.clients6.google.com', 'apis.google.com', 'www.google.com', 'ogs.google.com', 'google.com']
 
 CHECKS = [
-    {"key": "netflix", "domain": "www.netflix.com",      "path": "/title/8011759",    "kind": "code",  "ok": [200]},
+    {"key": "netflix", "domain": "www.netflix.com",      "path": "",                  "kind": "nf"},
     {"key": "youtube", "domain": "www.youtube.com",      "path": "/premium",          "kind": "text",  "need": b"Premium"},
     {"key": "chatgpt", "domain": "chatgpt.com",          "path": "/cdn-cgi/trace",    "kind": "loc"},
     {"key": "gemini",  "domain": "gemini.google.com",    "path": "/",                 "kind": "gemini"},
@@ -175,6 +175,37 @@ def dns_query_a(server, name, timeout=4):
         i += rdlen
     return ips
 
+def nf_region(head):
+    """从 x-originating-url 响应头解析奈飞区域"""
+    for line in head.split(b"\r\n"):
+        if line.lower().startswith(b"x-originating-url:"):
+            url = line.split(b":", 1)[1].strip().decode("utf-8", "ignore")
+            parts = [p for p in url.split("/") if p]
+            if len(parts) >= 3:
+                seg = parts[2].split("-")[0].lower()
+                if seg == "title":
+                    return "US"
+                if seg.isalpha() and len(seg) <= 3:
+                    return seg.upper()
+    return ""
+
+def check_netflix(answer_ip):
+    """双影片ID探测: 81215567(版权剧) / 80018499(自制剧测试页)"""
+    try:
+        status, head, body = https_via("www.netflix.com", answer_ip, "/title/81215567")
+        region = nf_region(head)
+        if status == 200:
+            return {"ok": True, "detail": "完整解锁 区域:%s" % (region or "?")}
+        if status in (403, 404) or b"page-404" in body or b"NSEZ-403" in body:
+            s2, h2, _ = https_via("www.netflix.com", answer_ip, "/title/80018499")
+            r2 = nf_region(h2) or region
+            if s2 == 200:
+                return {"ok": True, "detail": "仅自制剧 区域:%s" % (r2 or "?")}
+            return {"ok": False, "detail": "不解锁(自制剧页 HTTP %d)" % s2}
+        return {"ok": False, "detail": "HTTP %d" % status}
+    except Exception as e:
+        return {"ok": False, "detail": "检测异常: %s" % e}
+
 def run_checks(answer_ip, domains):
     out = {}
     try:
@@ -186,6 +217,9 @@ def run_checks(answer_ip, domains):
     for c in CHECKS:
         if not domain_match(domains, c["domain"]):
             out[c["key"]] = {"ok": None, "detail": "未解锁此服务"}
+            continue
+        if c["kind"] == "nf":
+            out[c["key"]] = check_netflix(answer_ip)
             continue
         try:
             status, head, body = https_via(c["domain"], answer_ip, c["path"])

@@ -87,9 +87,7 @@ def api_config(request: Request):
     c = db()
     wl = [r["ip"] for r in c.execute("SELECT ip FROM whitelist").fetchall()]
     c.close()
-    nips = [i for i in (n["ips"] or "").split(",") if i and i not in ("127.0.0.1", "::1")]
-    answer_ip = nips[0] if nips else get_setting("unlock_ip")
-    return {"answer_ip": answer_ip, "unlock_ip": answer_ip, "whitelist": wl}
+    return {"whitelist": wl}
 
 @app.post("/api/v1/report")
 async def api_report(request: Request):
@@ -215,12 +213,6 @@ __MSG__
 <form method=post action=/add_wl class=row><input name=ip placeholder="1.2.3.4" required><input name=note placeholder="备注(可选)"><button>添加</button></form>
 __WL_WARN__</div></div>
 
-<details style="margin-bottom:16px"><summary style="cursor:pointer;color:var(--sub);font-size:13px;padding:8px 0">🔧 备用解锁 IP(节点未上报公网IP时的回退值,一般不用) ▾</summary>
-<div class=card><h2>备用解锁 IP</h2>
-<div class=row><span class="big-ip">__UNLOCK_SHOW__</span>
-<form method=post action=/set_unlock class=row><input name=ip value="__UNLOCK_VAL__" placeholder="解锁 VPS 的 IP" style="width:220px"><button>保存</button></form></div></div>
-</details>
-
 <div class=card><h2>修改密码</h2>
 <form method=post action=/change_password class=row>
 <input type=password name=old placeholder="当前密码" required>
@@ -239,7 +231,6 @@ def index(request: Request):
     wl = c.execute("SELECT * FROM whitelist ORDER BY id").fetchall()
     checks = {r["node_id"]: (json.loads(r["data"]), r["ts"]) for r in c.execute("SELECT * FROM node_checks").fetchall()}
     c.close()
-    unlock = get_setting("unlock_ip")
     # 检测表
     ck_rows = ""
     for n in nodes:
@@ -298,8 +289,6 @@ def index(request: Request):
     body = (INDEX_HEAD
             .replace("__MSG__", msg)
             .replace("__CHECKS__", ck_rows)
-            .replace("__UNLOCK_SHOW__", html.escape(unlock) if unlock else "<span class=warn>未设置! 请填写</span>")
-            .replace("__UNLOCK_VAL__", html.escape(unlock))
             .replace("__NN__", str(len(nodes)))
             .replace("__NODES__", rows or "<tr><td colspan=9 class=muted>暂无节点,点击下方添加</td></tr>")
             .replace("__WL__", wlrows or "<tr><td colspan=3 class=muted>暂无记录</td></tr>")
@@ -332,11 +321,6 @@ def change_password(request: Request, old: str = Form(...), new1: str = Form(...
 @app.get("/logout")
 def logout():
     r = RedirectResponse("/", 302); r.delete_cookie("session"); return r
-
-@app.post("/set_unlock")
-def set_unlock(request: Request, ip: str = Form(...)):
-    if logged(request): set_setting("unlock_ip", ip.strip())
-    return RedirectResponse("/", 302)
 
 @app.post("/set_node_domains/{nid}")
 def set_node_domains(request: Request, nid: int, domains: str = Form(...)):
