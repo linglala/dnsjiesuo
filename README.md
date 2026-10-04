@@ -89,7 +89,7 @@ dig @DNS机器IP chatgpt.com
 |---|---|
 | 解锁 VPS IP | 面板首页顶部 |
 | IP 白名单 | 面板首页（支持 CIDR） |
-| 解锁域名 | 面板首页编辑框，每行一条；格式 `域名 [解锁IP]`，不带 IP 走默认，支持多解锁机分服务/区域 |
+| 解锁域名 | 各节点本地管理：`/etc/dnspanel/domains.txt`（一行一个域名，留空用内置默认 ChatGPT+Gemini 23 条） |
 
 ## 注意事项
 

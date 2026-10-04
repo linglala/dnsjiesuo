@@ -91,6 +91,17 @@ def render_corefile(answer_ip, whitelist, domains):
            "    }" % (zones, answer_ip, zones)) if zones else "    # 本节点无负责域名"
     return COREFILE_TPL.replace("__ALLOW__", allow).replace("__TEMPLATES__", tpl)
 
+def load_domains(cfg):
+    """域名名单优先级: 面板下发 > 本地 /etc/dnspanel/domains.txt > 内置默认"""
+    d = cfg.get("domains")
+    if d:
+        return [x.strip() for x in d if x.strip()]
+    try:
+        with open("/etc/dnspanel/domains.txt") as f:
+            return [l.strip() for l in f if l.strip() and not l.startswith("#")]
+    except Exception:
+        return list(DOMAINS)
+
 def domain_match(domains, qname):
     for d in domains:
         d = d.split()[0]
@@ -174,7 +185,7 @@ def run_checks(answer_ip, domains):
         out["dns"] = {"ok": False, "detail": "DNS查询失败: %s" % e}
     for c in CHECKS:
         if not domain_match(domains, c["domain"]):
-            out[c["key"]] = {"ok": None, "detail": "非本节点负责"}
+            out[c["key"]] = {"ok": None, "detail": "未解锁此服务"}
             continue
         try:
             status, head, body = https_via(c["domain"], answer_ip, c["path"])
@@ -202,7 +213,7 @@ while True:
         cfg = api("/api/v1/config")
         ips = my_ips()
         answer_ip = cfg.get("answer_ip") or cfg.get("unlock_ip") or public_ip(ips)
-        domains = [d.strip() for d in (cfg.get("domains") or []) if d.strip()]
+        domains = load_domains(cfg)
         h = hashlib.md5(json.dumps({"d": domains, "w": cfg.get("whitelist", []), "ip": answer_ip}, sort_keys=True).encode()).hexdigest()
         if h != last_hash:
             if answer_ip:

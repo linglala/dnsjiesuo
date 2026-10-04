@@ -89,8 +89,7 @@ def api_config(request: Request):
     c.close()
     nips = [i for i in (n["ips"] or "").split(",") if i and i not in ("127.0.0.1", "::1")]
     answer_ip = nips[0] if nips else get_setting("unlock_ip")
-    domains = [l.split()[0] for l in get_domains() if l.split()]
-    return {"answer_ip": answer_ip, "unlock_ip": answer_ip, "whitelist": wl, "domains": domains}
+    return {"answer_ip": answer_ip, "unlock_ip": answer_ip, "whitelist": wl}
 
 @app.post("/api/v1/report")
 async def api_report(request: Request):
@@ -205,7 +204,7 @@ __MSG__
 <tbody>__CHECKS__</tbody></table></div>
 
 <div class=card><h2>DNS 节点 <span class=n>共 __NN__ 台</span></h2>
-<table><thead><tr><th>ID</th><th>名称</th><th>Token</th><th>本机IP</th><th>负责域名</th><th>状态</th><th>最后心跳</th><th>今日流量</th><th>累计流量</th><th></th></tr></thead>
+<table><thead><tr><th>ID</th><th>名称</th><th>Token</th><th>本机IP</th><th>状态</th><th>最后心跳</th><th>今日流量</th><th>累计流量</th><th></th></tr></thead>
 <tbody>__NODES__</tbody></table>
 <div class=row style="margin-top:12px"><b>添加节点</b>
 <form method=post action=/add_node class=row><input name=name placeholder="节点名称,如 dns-东京1" required><button>生成 Token</button></form></div></div>
@@ -215,12 +214,6 @@ __MSG__
 <div class=row style="margin-top:12px"><b>添加白名单</b>
 <form method=post action=/add_wl class=row><input name=ip placeholder="1.2.3.4" required><input name=note placeholder="备注(可选)"><button>添加</button></form>
 __WL_WARN__</div></div>
-
-<div class=card><h2>解锁域名 <span class=n>所有节点共用此名单并各自回答自己的公网IP; 分流由 V2bX dns.json 决定; 每行一个域名,自动含子域</span></h2>
-<form method=post action=/set_domains><textarea name=domains rows=11>__DOMAINS__</textarea>
-<div class=row style="margin-top:10px"><button>保存域名</button>
-<button class=ghost form=resetdoms>恢复默认</button></form>
-<form id=resetdoms method=post action=/reset_domains></form></div></div>
 
 <details style="margin-bottom:16px"><summary style="cursor:pointer;color:var(--sub);font-size:13px;padding:8px 0">🔧 备用解锁 IP(节点未上报公网IP时的回退值,一般不用) ▾</summary>
 <div class=card><h2>备用解锁 IP</h2>
@@ -257,7 +250,7 @@ def index(request: Request):
             if item is None:
                 tds += "<td><span class='svc unk'>未测</span></td>"
             elif item.get("ok") is None:
-                tds += "<td><span class='svc unk' title='%s'>其他节点</span></td>" % html.escape(item.get("detail", ""))
+                tds += "<td><span class='svc unk' title='%s'>未解锁</span></td>" % html.escape(item.get("detail", ""))
             elif item.get("ok"):
                 detail = item.get("detail", "")
                 tds += "<td><span class='svc ok' title='%s'>%s ✓</span></td>" % (html.escape(detail), label)
@@ -285,13 +278,12 @@ def index(request: Request):
         install_cmd = "curl -fsSL https://raw.githubusercontent.com/linglala/dnsjiesuo/main/install.sh | bash -s -- %s %s %s" % (
             n["token"], html.escape(panel_addr), html.escape(n["name"]))
         nips = set((n["ips"] or "").split(",")) if n["ips"] else set()
-        mine = len(get_domains())
         ipshow = "<br>".join(html.escape(i) for i in sorted(nips)) if nips else "<span class=warn>未上报</span>"
-        rows += ("<tr><td>%d</td><td>%s</td><td class=mono>%s…</td><td class=mono>%s</td><td>%d 条</td><td>%s</td><td class=mono>%s</td>"
+        rows += ("<tr><td>%d</td><td>%s</td><td class=mono>%s…</td><td class=mono>%s</td><td>%s</td><td class=mono>%s</td>"
                  "<td>%.2f GB</td><td>%.2f GB</td>"
                  "<td><a href=/del_node/%d onclick=\"return confirm('删除该节点?')\">删除</a></td></tr>"
-                 "<tr><td></td><td colspan=9><button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this)>📋 复制一键安装命令</button> <span class=muted>所有节点共用上方解锁域名名单,各自回答自己的公网IP</span></td></tr>"
-                 % (n["id"], html.escape(n["name"]), n["token"][:8], ipshow, mine, badge, ls, used, total, n["id"], html.escape(install_cmd, quote=True)))
+                 "<tr><td></td><td colspan=8><button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this)>📋 复制一键安装命令</button> <span class=muted>所有节点共用上方解锁域名名单,各自回答自己的公网IP</span></td></tr>"
+                 % (n["id"], html.escape(n["name"]), n["token"][:8], ipshow, badge, ls, used, total, n["id"], html.escape(install_cmd, quote=True)))
     wlrows = "".join("<tr><td class=mono>%s</td><td>%s</td><td><a href=/del_wl/%d onclick=\"return confirm('删除?')\">删除</a></td></tr>"
                      % (html.escape(w["ip"]), html.escape(w["note"] or "-"), w["id"]) for w in wl)
     wlwarn = ""
@@ -308,9 +300,8 @@ def index(request: Request):
             .replace("__CHECKS__", ck_rows)
             .replace("__UNLOCK_SHOW__", html.escape(unlock) if unlock else "<span class=warn>未设置! 请填写</span>")
             .replace("__UNLOCK_VAL__", html.escape(unlock))
-            .replace("__DOMAINS__", html.escape("\n".join(get_domains())))
             .replace("__NN__", str(len(nodes)))
-            .replace("__NODES__", rows or "<tr><td colspan=8 class=muted>暂无节点,点击下方添加</td></tr>")
+            .replace("__NODES__", rows or "<tr><td colspan=9 class=muted>暂无节点,点击下方添加</td></tr>")
             .replace("__WL__", wlrows or "<tr><td colspan=3 class=muted>暂无记录</td></tr>")
             .replace("__WL_WARN__", wlwarn))
     return page(body)
@@ -345,19 +336,6 @@ def logout():
 @app.post("/set_unlock")
 def set_unlock(request: Request, ip: str = Form(...)):
     if logged(request): set_setting("unlock_ip", ip.strip())
-    return RedirectResponse("/", 302)
-
-@app.post("/set_domains")
-def set_domains(request: Request, domains: str = Form(...)):
-    if logged(request):
-        lines = [l.strip() for l in domains.replace("\r", "").split("\n") if l.strip()]
-        set_setting("domains", json.dumps(lines))
-    return RedirectResponse("/", 302)
-
-@app.post("/reset_domains")
-def reset_domains(request: Request):
-    if logged(request):
-        c = db(); c.execute("DELETE FROM settings WHERE key='domains'"); c.commit(); c.close()
     return RedirectResponse("/", 302)
 
 @app.post("/set_node_domains/{nid}")
