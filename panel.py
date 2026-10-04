@@ -139,8 +139,8 @@ a{color:var(--pri);text-decoration:none}a:hover{text-decoration:underline}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
 .card h2{font-size:14px;margin-bottom:8px;display:flex;align-items:center;gap:8px}
 .card h2 .n{font-size:12px;color:var(--sub);font-weight:normal}
-table{width:100%;border-collapse:collapse}
-th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);font-size:13px}
+table{width:100%;border-collapse:collapse;table-layout:fixed}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 th{color:var(--sub);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
 tr:last-child td{border-bottom:none}
 tbody tr:hover{background:#fafbff}
@@ -202,17 +202,17 @@ LOGIN_HTML = """<div class="card login-box"><h2>🔐 登录</h2>
 INDEX_HEAD = """<header><h1><span class=dot></span>DNS 解锁面板</h1><a href=/logout>退出登录</a></header>
 __MSG__
 <div class=card><h2>解锁检测 <span class=n>各节点通过解锁 IP 实测,每 10 分钟更新</span></h2>
-<table><thead><tr><th>节点</th><th>DNS规则</th><th>奈飞</th><th>YouTube</th><th>ChatGPT</th><th>Gemini</th><th>Disney+</th><th>检测时间</th></tr></thead>
+<table><thead><tr><th style="width:14%">节点</th><th>DNS规则</th><th>奈飞</th><th>YouTube</th><th>ChatGPT</th><th>Gemini</th><th>Disney+</th><th style="width:10%">检测时间</th></tr></thead>
 <tbody>__CHECKS__</tbody></table></div>
 
 <div class=card><h2>DNS 节点 <span class=n>共 __NN__ 台</span></h2>
-<table><thead><tr><th>名称</th><th>本机IP</th><th>状态</th><th>最后心跳</th><th>今日流量</th><th>累计流量</th><th style="width:250px">操作</th></tr></thead>
+<table><thead><tr><th style="width:15%">名称</th><th style="width:14%">本机IP</th><th style="width:7%">状态</th><th style="width:10%">最后心跳</th><th style="width:9%">今日流量</th><th style="width:9%">累计流量</th><th>操作</th></tr></thead>
 <tbody>__NODES__</tbody></table>
 <div class=row style="margin-top:12px"><b>添加节点</b>
 <form method=post action=/add_node class=row><input name=name placeholder="节点名称,如 dns-东京1" required><button>生成 Token</button></form></div></div>
 
 <div class=card><h2>IP 白名单 <span class=n>支持 CIDR,如 1.2.3.0/24</span></h2>
-<table><thead><tr><th>IP / CIDR</th><th>备注</th><th></th></tr></thead><tbody>__WL__</tbody></table>
+<table><thead><tr><th style="width:30%">IP / CIDR</th><th>备注</th><th style="width:8%"></th></tr></thead><tbody>__WL__</tbody></table>
 <div class=row style="margin-top:12px"><b>添加白名单</b>
 <form method=post action=/add_wl class=row><input name=ip placeholder="1.2.3.4" required><input name=note placeholder="备注(可选)"><button>添加</button></form>
 __WL_WARN__</div></div>
