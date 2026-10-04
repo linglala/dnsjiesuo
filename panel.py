@@ -35,6 +35,7 @@ def init():
     """)
     try:
         c.execute("ALTER TABLE nodes ADD COLUMN ips TEXT DEFAULT ''")
+        c.execute("ALTER TABLE nodes ADD COLUMN domains TEXT DEFAULT ''")
     except Exception:
         pass
     c.commit(); c.close()
@@ -79,6 +80,22 @@ _fails = {"count": 0, "until": 0.0}
 init()
 
 # ---------- agent api ----------
+def node_domains(n):
+    """节点负责的域名: 优先节点自己的配置; 否则旧版全局映射中指向本机的"""
+    if n["domains"]:
+        return [l.strip() for l in n["domains"].replace("\r", "").split("\n") if l.strip()]
+    ips = set((n["ips"] or "").split(","))
+    unlock0 = get_setting("unlock_ip")
+    out = []
+    for line in get_domains():
+        parts = line.split()
+        if not parts:
+            continue
+        ip = parts[1] if len(parts) > 1 else unlock0
+        if ip in ips:
+            out.append(parts[0])
+    return out
+
 @app.get("/api/v1/config")
 def api_config(request: Request):
     n = node_by_token(request.headers.get("X-Node-Token", ""))
@@ -86,7 +103,9 @@ def api_config(request: Request):
     c = db()
     wl = [r["ip"] for r in c.execute("SELECT ip FROM whitelist").fetchall()]
     c.close()
-    return {"unlock_ip": get_setting("unlock_ip"), "whitelist": wl, "domains": get_domains()}
+    nips = [i for i in (n["ips"] or "").split(",") if i and i not in ("127.0.0.1", "::1")]
+    answer_ip = nips[0] if nips else get_setting("unlock_ip")
+    return {"answer_ip": answer_ip, "unlock_ip": answer_ip, "whitelist": wl, "domains": node_domains(n)}
 
 @app.post("/api/v1/report")
 async def api_report(request: Request):
@@ -200,16 +219,6 @@ __MSG__
 <table><thead><tr><th>节点</th><th>DNS规则</th><th>奈飞</th><th>YouTube</th><th>ChatGPT</th><th>Gemini</th><th>Disney+</th><th>检测时间</th></tr></thead>
 <tbody>__CHECKS__</tbody></table></div>
 
-<div class=card><h2>解锁 VPS IP</h2>
-<div class=row><span class="big-ip">__UNLOCK_SHOW__</span>
-<form method=post action=/set_unlock class=row><input name=ip value="__UNLOCK_VAL__" placeholder="解锁 VPS 的 IP" style="width:220px"><button>保存</button></form></div></div>
-
-<div class=card><h2>解锁域名 <span class=n>集群模式: 域名 [空格 解锁IP]; 每台节点只回答解锁IP指向本机的域名, 其余由对应节点负责; dns.json 按组分流到各节点</span></h2>
-<form method=post action=/set_domains><textarea name=domains rows=12 placeholder="chatgpt.com&#10;netflix.com 203.0.113.5">__DOMAINS__</textarea>
-<div class=row style="margin-top:10px"><button>保存域名</button>
-<button class=ghost form=resetdoms>恢复默认</button></form>
-<form id=resetdoms method=post action=/reset_domains></form></div></div>
-
 <div class=card><h2>DNS 节点 <span class=n>共 __NN__ 台</span></h2>
 <table><thead><tr><th>ID</th><th>名称</th><th>Token</th><th>本机IP</th><th>负责域名</th><th>状态</th><th>最后心跳</th><th>今日流量</th><th>累计流量</th><th></th></tr></thead>
 <tbody>__NODES__</tbody></table>
@@ -221,6 +230,18 @@ __MSG__
 <div class=row style="margin-top:12px"><b>添加白名单</b>
 <form method=post action=/add_wl class=row><input name=ip placeholder="1.2.3.4" required><input name=note placeholder="备注(可选)"><button>添加</button></form>
 __WL_WARN__</div></div>
+
+<details style="margin-bottom:16px"><summary style="cursor:pointer;color:var(--sub);font-size:13px;padding:8px 0">🔧 全局默认配置(旧版兼容 / 新节点模板) ▾</summary>
+<div class=card><h2>默认解锁 IP <span class=n>仅作旧版回退,集群模式下各节点用自己的公网IP应答</span></h2>
+<div class=row><span class="big-ip">__UNLOCK_SHOW__</span>
+<form method=post action=/set_unlock class=row><input name=ip value="__UNLOCK_VAL__" placeholder="解锁 VPS 的 IP" style="width:220px"><button>保存</button></form></div></div>
+
+<div class=card><h2>默认域名列表 <span class=n>节点未单独配置时,按"域名 [解锁IP]"解析,IP指向哪台就由哪台负责</span></h2>
+<form method=post action=/set_domains><textarea name=domains rows=11>__DOMAINS__</textarea>
+<div class=row style="margin-top:10px"><button>保存域名</button>
+<button class=ghost form=resetdoms>恢复默认</button></form>
+<form id=resetdoms method=post action=/reset_domains></form></div></div>
+</details>
 
 <div class=card><h2>修改密码</h2>
 <form method=post action=/change_password class=row>
@@ -279,19 +300,17 @@ def index(request: Request):
         install_cmd = "curl -fsSL https://raw.githubusercontent.com/linglala/dnsjiesuo/main/install.sh | bash -s -- %s %s %s" % (
             n["token"], html.escape(panel_addr), html.escape(n["name"]))
         nips = set((n["ips"] or "").split(",")) if n["ips"] else set()
-        mine = 0
-        unlock0 = get_setting("unlock_ip")
-        for line in get_domains():
-            parts = line.split()
-            if not parts: continue
-            ip = parts[1] if len(parts) > 1 else unlock0
-            if ip in nips: mine += 1
+        n_dom = node_domains(n)
+        mine = len(n_dom)
         ipshow = "<br>".join(html.escape(i) for i in sorted(nips)) if nips else "<span class=warn>未上报</span>"
         rows += ("<tr><td>%d</td><td>%s</td><td class=mono>%s…</td><td class=mono>%s</td><td>%d 条</td><td>%s</td><td class=mono>%s</td>"
                  "<td>%.2f GB</td><td>%.2f GB</td>"
                  "<td><a href=/del_node/%d onclick=\"return confirm('删除该节点?')\">删除</a></td></tr>"
-                 "<tr><td></td><td colspan=9><button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this)>📋 复制一键安装命令</button> <span class=muted>在 DNS/解锁 机器上执行,自动完成全部部署</span></td></tr>"
-                 % (n["id"], html.escape(n["name"]), n["token"][:8], ipshow, mine, badge, ls, used, total, n["id"], html.escape(install_cmd, quote=True)))
+                 "<tr><td></td><td colspan=9><button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this)>📋 复制一键安装命令</button> "
+                 "<details style=\"display:inline-block;margin-left:10px\"><summary style=\"cursor:pointer;font-size:12px;color:var(--pri)\">负责域名 (%d 条) ▾</summary>"
+                 "<form method=post action=/set_node_domains/%d style=\"margin-top:6px\"><textarea name=domains rows=6 style=\"width:420px\">%s</textarea><br>"
+                 "<button style=\"margin-top:4px\">保存</button> <span class=muted>留空则继承全局默认;每行一个域名,自动含子域</span></form></details></td></tr>"
+                 % (n["id"], html.escape(n["name"]), n["token"][:8], ipshow, mine, badge, ls, used, total, n["id"], html.escape(install_cmd, quote=True), mine, n["id"], html.escape("\n".join(n_dom))))
     wlrows = "".join("<tr><td class=mono>%s</td><td>%s</td><td><a href=/del_wl/%d onclick=\"return confirm('删除?')\">删除</a></td></tr>"
                      % (html.escape(w["ip"]), html.escape(w["note"] or "-"), w["id"]) for w in wl)
     wlwarn = ""
@@ -358,6 +377,13 @@ def set_domains(request: Request, domains: str = Form(...)):
 def reset_domains(request: Request):
     if logged(request):
         c = db(); c.execute("DELETE FROM settings WHERE key='domains'"); c.commit(); c.close()
+    return RedirectResponse("/", 302)
+
+@app.post("/set_node_domains/{nid}")
+def set_node_domains(request: Request, nid: int, domains: str = Form(...)):
+    if logged(request):
+        lines = [l.strip() for l in domains.replace("\r", "").split("\n") if l.strip()]
+        c = db(); c.execute("UPDATE nodes SET domains=? WHERE id=?", ("\n".join(lines), nid)); c.commit(); c.close()
     return RedirectResponse("/", 302)
 
 @app.post("/add_node")

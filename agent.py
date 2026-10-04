@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# DNS 解锁节点 Agent v2: 拉配置/生成 Corefile/上报心跳流量 + 解锁检测
+# DNS 解锁节点 Agent v3 (集群模式): 每台节点只服务"自己负责"的域名,答案=本机公网IP
 import os, time, json, hashlib, socket, ssl, struct, random, urllib.request
 
 PANEL = os.environ.get("PANEL_URL", "").rstrip("/")
@@ -7,11 +7,10 @@ TOKEN = os.environ.get("NODE_TOKEN", "")
 NAME  = os.environ.get("NODE_NAME", "node")
 COREFILE = os.environ.get("COREFILE", "/etc/coredns/Corefile")
 INTERVAL = int(os.environ.get("INTERVAL", "30"))
-CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "600"))   # 解锁检测间隔(秒)
+CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "600"))
 
 DOMAINS = ['chatgpt.com', 'openai.com', 'chat.com', 'sora.com', 'oaistatsig.com', 'oaiusercontent.com', 'oaistatic.com', 'crixet.com', 'openaicom.imgix.net', 'arkoselabs.com', 'chatgpt.livekit.cloud', 'host.livekit.cloud', 'turn.livekit.cloud', 'webpubsub.azure.com', 'gemini.google.com', 'generativelanguage.googleapis.com', 'alkalicore.googleapis.com', 'jnn-pa.googleapis.com', 'waa-pa.clients6.google.com', 'apis.google.com', 'www.google.com', 'ogs.google.com', 'google.com']
 
-# 解锁检测项: 直连解锁IP + SNI, 端到端验证
 CHECKS = [
     {"key": "netflix", "domain": "www.netflix.com",      "path": "/title/8011759",    "kind": "code",  "ok": [200]},
     {"key": "youtube", "domain": "www.youtube.com",      "path": "/premium",          "kind": "text",  "need": b"Premium"},
@@ -27,7 +26,8 @@ COREFILE_TPL = '''.:53 {
 __ALLOW__
         block
     }
-__TEMPLATES__\n    forward . 8.8.8.8 1.1.1.1
+__TEMPLATES__
+    forward . 8.8.8.8 1.1.1.1
     cache 300
     errors
     log
@@ -55,11 +55,10 @@ def read_traffic():
     return rx, tx
 
 def my_ips():
-    """本机所有相关 IP: 回环 + 主公网IP(UDP探测) + 环境变量 NODE_IPS 额外指定"""
     ips = {"127.0.0.1", "::1"}
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))   # 不真正发包,仅取本机主IP
+        s.connect(("8.8.8.8", 80))
         ips.add(s.getsockname()[0])
         s.close()
     except Exception:
@@ -69,49 +68,13 @@ def my_ips():
             ips.add(ip.strip())
     return ips
 
-def my_rules(domains, default_ip, ips):
-    """只保留解锁IP指向本机的规则,其余由别的节点负责"""
-    out = []
-    for item in domains:
-        parts = item.split()
-        if not parts:
-            continue
-        ip = parts[1] if len(parts) > 1 else default_ip
-        if ip in ips:
-            out.append(item)
-    return out
+def public_ip(ips):
+    for i in sorted(ips):
+        if i not in ("127.0.0.1", "::1"):
+            return i
+    return None
 
-def parse_domain_rules(domains, default_ip):
-    """域名→IP 映射: 每行 '域名' 或 '域名 IP'。返回 [(ip, [域名...])], 保持输入顺序"""
-    groups = {}
-    order = []
-    for item in domains:
-        parts = item.split()
-        if not parts:
-            continue
-        dom = parts[0]
-        ip = parts[1] if len(parts) > 1 else default_ip
-        if ip not in groups:
-            groups[ip] = []
-            order.append(ip)
-        groups[ip].append(dom)
-    return [(ip, groups[ip]) for ip in order if ip]
-
-def ip_for_domain(domains, default_ip, qname):
-    """找最适合 qname 的映射 IP: 匹配最长后缀,无匹配走默认"""
-    best = None
-    for item in domains:
-        parts = item.split()
-        if not parts:
-            continue
-        dom, ip = parts[0], (parts[1] if len(parts) > 1 else default_ip)
-        if qname == dom or qname.endswith("." + dom):
-            if best is None or len(dom) > len(best[0]):
-                best = (dom, ip)
-    return best[1] if best else default_ip
-
-def render_corefile(unlock_ip, whitelist, domains):
-    # 本机始终放行(供自检/本地测试),其余按面板白名单
+def render_corefile(answer_ip, whitelist, domains):
     lines = ["        allow net 127.0.0.1"]
     for ip in whitelist:
         if ip not in ("127.0.0.1", "::1"):
@@ -119,24 +82,24 @@ def render_corefile(unlock_ip, whitelist, domains):
     if len(lines) == 1:
         lines.append("        # 白名单为空,外部节点无法查询,请到面板添加")
     allow = "\n".join(lines)
-    # 按解锁IP分组渲染 template 块
-    tpl_blocks = []
-    for ip, doms in parse_domain_rules(domains, unlock_ip):
-        zones = " ".join(doms)
-        tpl_blocks.append(
-            "    template IN A %s {\n"
-            "        answer \"{{ .Name }} 60 IN A %s\"\n"
-            "    }\n"
-            "    template IN AAAA %s {\n"
-            "        answer \"{{ .Name }} 60 IN AAAA ::\"\n"
-            "    }" % (zones, ip, zones))
-    tpl = "\n".join(tpl_blocks)
-    return (COREFILE_TPL.replace("__ALLOW__", allow)
-               .replace("__TEMPLATES__", tpl))
+    zones = " ".join(d.split()[0] for d in domains if d.split())
+    tpl = ("    template IN A %s {\n"
+           "        answer \"{{ .Name }} 60 IN A %s\"\n"
+           "    }\n"
+           "    template IN AAAA %s {\n"
+           "        answer \"{{ .Name }} 60 IN AAAA ::\"\n"
+           "    }" % (zones, answer_ip, zones)) if zones else "    # 本节点无负责域名"
+    return COREFILE_TPL.replace("__ALLOW__", allow).replace("__TEMPLATES__", tpl)
+
+def domain_match(domains, qname):
+    for d in domains:
+        d = d.split()[0]
+        if qname == d or qname.endswith("." + d):
+            return True
+    return False
 
 # ---------- 解锁检测 ----------
 def https_via(domain, ip, path="/", timeout=8):
-    # 连接 ip:443 但用 domain 做 SNI/Host, 模拟用户经解锁后的访问
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -201,40 +164,30 @@ def dns_query_a(server, name, timeout=4):
         i += rdlen
     return ips
 
-def run_checks(unlock_ip, domains, ips):
+def run_checks(answer_ip, domains):
     out = {}
-    # DNS 规则自检(仅当 chatgpt.com 由本机负责时)
     try:
-        probe = "chatgpt.com"
-        probe_ip = ip_for_domain(domains, unlock_ip, probe)
-        if probe_ip in ips:
-            got = dns_query_a("127.0.0.1", probe)
-            hit = probe_ip in got
-            out["dns"] = {"ok": hit, "detail": ("本机DNS返回: " + ",".join(got)) if got else "无解析结果"}
-        else:
-            out["dns"] = {"ok": None, "detail": "由其他节点负责"}
+        probe = domains[0].split()[0] if domains else "chatgpt.com"
+        got = dns_query_a("127.0.0.1", probe)
+        out["dns"] = {"ok": answer_ip in got, "detail": ("本机DNS返回: " + ",".join(got)) if got else "无解析结果"}
     except Exception as e:
         out["dns"] = {"ok": False, "detail": "DNS查询失败: %s" % e}
     for c in CHECKS:
-        check_ip = ip_for_domain(domains, unlock_ip, c["domain"])
-        if check_ip not in ips:
-            out[c["key"]] = {"ok": None, "detail": "由其他节点负责(%s)" % check_ip}
+        if not domain_match(domains, c["domain"]):
+            out[c["key"]] = {"ok": None, "detail": "非本节点负责"}
             continue
         try:
-            status, head, body = https_via(c["domain"], check_ip, c["path"])
+            status, head, body = https_via(c["domain"], answer_ip, c["path"])
             if c["kind"] == "code":
-                ok = status in c["ok"]
-                out[c["key"]] = {"ok": ok, "detail": "HTTP %d" % status}
+                out[c["key"]] = {"ok": status in c["ok"], "detail": "HTTP %d" % status}
             elif c["kind"] == "text":
-                ok = status == 200 and c["need"] in body
-                out[c["key"]] = {"ok": ok, "detail": "HTTP %d" % status}
+                out[c["key"]] = {"ok": status == 200 and c["need"] in body, "detail": "HTTP %d" % status}
             elif c["kind"] == "loc":
                 loc = ""
                 for line in body.decode("utf-8", "ignore").splitlines():
                     if line.startswith("loc="):
                         loc = line[4:].strip().upper()
-                ok = bool(loc) and loc not in UNSUPPORTED_LOC
-                out[c["key"]] = {"ok": ok, "detail": "出口区域: %s" % (loc or "未知")}
+                out[c["key"]] = {"ok": bool(loc) and loc not in UNSUPPORTED_LOC, "detail": "出口区域: %s" % (loc or "未知")}
             elif c["kind"] == "gemini":
                 blocked = (status in (301, 302) and b"unavailable" in head) or status == 403
                 out[c["key"]] = {"ok": not blocked, "detail": "HTTP %d" % status}
@@ -247,27 +200,26 @@ next_check = 0.0
 while True:
     try:
         cfg = api("/api/v1/config")
-        unlock_ip = cfg.get("unlock_ip", "").strip()
         ips = my_ips()
-        domains_all = cfg.get("domains") or DOMAINS
-        rules = my_rules(domains_all, unlock_ip, ips) if unlock_ip else []
-        h = hashlib.md5(json.dumps({"r": rules, "w": cfg.get("whitelist", [])}, sort_keys=True).encode()).hexdigest()
+        answer_ip = cfg.get("answer_ip") or cfg.get("unlock_ip") or public_ip(ips)
+        domains = [d.strip() for d in (cfg.get("domains") or []) if d.strip()]
+        h = hashlib.md5(json.dumps({"d": domains, "w": cfg.get("whitelist", []), "ip": answer_ip}, sort_keys=True).encode()).hexdigest()
         if h != last_hash:
-            if unlock_ip:
+            if answer_ip:
                 os.makedirs(os.path.dirname(COREFILE), exist_ok=True)
                 tmp = COREFILE + ".tmp"
                 with open(tmp, "w") as f:
-                    f.write(render_corefile(unlock_ip, cfg.get("whitelist", []), rules))
+                    f.write(render_corefile(answer_ip, cfg.get("whitelist", []), domains))
                 os.replace(tmp, COREFILE)
                 last_hash = h
-                print("[%s] Corefile updated (mine=%d/%d rules, wl=%d)" % (time.strftime("%H:%M:%S"), len(rules), len(domains_all), len(cfg.get("whitelist", []))), flush=True)
+                print("[%s] Corefile updated (answer=%s, domains=%d, wl=%d)" % (time.strftime("%H:%M:%S"), answer_ip, len(domains), len(cfg.get("whitelist", []))), flush=True)
             else:
-                print("[%s] unlock_ip not set on panel, skip" % time.strftime("%H:%M:%S"), flush=True)
+                print("[%s] no answer_ip, skip" % time.strftime("%H:%M:%S"), flush=True)
         rx, tx = read_traffic()
         payload = {"name": NAME, "rx": rx, "tx": tx, "ips": sorted(ips)}
-        if unlock_ip and time.time() >= next_check:
+        if answer_ip and domains and time.time() >= next_check:
             print("[%s] running unlock checks..." % time.strftime("%H:%M:%S"), flush=True)
-            payload["checks"] = run_checks(unlock_ip, domains_all, ips)
+            payload["checks"] = run_checks(answer_ip, domains)
             next_check = time.time() + CHECK_INTERVAL
         api("/api/v1/report", payload)
     except Exception as e:
