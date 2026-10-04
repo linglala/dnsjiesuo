@@ -131,7 +131,7 @@ PAGE = """<!doctype html><html lang=zh><head><meta charset=utf-8>
 :root{--bg:#f4f6fb;--card:#fff;--line:#e5e9f2;--text:#1f2733;--sub:#8a94a6;--pri:#4f46e5;--pri2:#4338ca;--ok:#16a34a;--bad:#dc2626;--warn:#d97706}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);font-size:14px}
-.wrap{max-width:1040px;margin:0 auto;padding:24px 16px 60px}
+.wrap{max-width:1480px;margin:0 auto;padding:20px 24px 60px}
 header{display:flex;justify-content:space-between;align-items:center;padding:14px 0 22px}
 h1{font-size:20px;display:flex;align-items:center;gap:8px}
 h1 .dot{width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(22,163,74,.15)}
@@ -206,7 +206,7 @@ __MSG__
 <tbody>__CHECKS__</tbody></table></div>
 
 <div class=card><h2>DNS 节点 <span class=n>共 __NN__ 台</span></h2>
-<table><thead><tr><th>ID</th><th>名称</th><th>Token</th><th>本机IP</th><th>状态</th><th>最后心跳</th><th>今日流量</th><th>累计流量</th><th></th></tr></thead>
+<table><thead><tr><th>名称</th><th>本机IP</th><th>状态</th><th>最后心跳</th><th>今日流量</th><th>累计流量</th><th style="width:210px">操作</th></tr></thead>
 <tbody>__NODES__</tbody></table>
 <div class=row style="margin-top:12px"><b>添加节点</b>
 <form method=post action=/add_node class=row><input name=name placeholder="节点名称,如 dns-东京1" required><button>生成 Token</button></form></div></div>
@@ -247,17 +247,13 @@ def index(request: Request):
             elif item.get("ok") is None:
                 tds += "<td><span class='svc unk' title='%s'>未解锁</span></td>" % html.escape(item.get("detail", ""))
             elif item.get("ok"):
-                detail = item.get("detail", "")
-                tds += "<td><span class='svc ok' title='%s'>%s ✓</span></td>" % (html.escape(detail), label)
+                tds += "<td><span class='svc ok' title='%s'>%s ✓</span></td>" % (html.escape(item.get("detail", "")), label)
             else:
-                detail = item.get("detail", "")
-                tds += "<td><span class='svc bad' title='%s'>%s ✗</span></td>" % (html.escape(detail), label)
-        ck_rows += "<tr><td><b>%s</b></td>%s<td class=mono>%s</td></tr>" % (
-            html.escape(n["name"]), tds,
-            cst(ts))
+                tds += "<td><span class='svc bad' title='%s'>%s ✗</span></td>" % (html.escape(item.get("detail", "")), label)
+        ck_rows += "<tr><td><b>%s</b></td>%s<td class=mono>%s</td></tr>" % (html.escape(n["name"]), tds, cst(ts))
     if not nodes:
         ck_rows = "<tr><td colspan=8 class=muted>暂无节点</td></tr>"
-    # 节点表
+    # 节点表单行
     rows = ""
     for n in nodes:
         on = (time.time() - n["last_seen"]) < 120
@@ -269,22 +265,26 @@ def index(request: Request):
         total = (n["rx"]+n["tx"])/1e9
         badge = "<span class=badge on>在线</span>" if on else "<span class=badge off>离线</span>"
         ls = cst(n["last_seen"])
-        panel_addr = host if host.startswith("http") else "http://" + host
-        install_cmd = "curl -fsSL https://raw.githubusercontent.com/linglala/dnsjiesuo/main/install.sh | bash -s -- %s %s %s" % (
-            n["token"], html.escape(panel_addr), html.escape(n["name"]))
         nips = set((n["ips"] or "").split(",")) if n["ips"] else set()
         pub = [i for i in sorted(nips) if i not in ("127.0.0.1", "::1")]
         ipshow = "<br>".join(html.escape(i) for i in pub) if pub else "<span class=warn>未上报</span>"
         note = (n["note"] or "").strip()
         nameshow = html.escape(n["name"]) + ("<br><span class=muted style=\"font-size:12px\">📌 %s</span>" % html.escape(note) if note else "")
-        rows += ("<tr><td>%d</td><td>%s</td><td class=mono>%s…</td><td class=mono>%s</td><td>%s</td><td class=mono>%s</td>"
-                 "<td>%.2f GB</td><td>%.2f GB</td>"
-                 "<td><a href=/del_node/%d onclick=\"return confirm('删除该节点?')\">删除</a></td></tr>"
-                 "<tr><td></td><td colspan=8><button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this)>📋 复制一键安装命令</button> "
-                 "<form method=post action=/set_node_note/%d style=\"display:inline;margin-left:12px\"><input name=note value=\"%s\" placeholder=\"备注:用途/负责域名等\" style=\"width:240px;padding:4px 8px\"><button class=ghost style=\"padding:4px 10px\">保存备注</button></form> "
-                 "%s</td></tr>"
-                 % (n["id"], nameshow, n["token"][:8], ipshow, badge, ls, used, total, n["id"], html.escape(install_cmd, quote=True), n["id"], html.escape(note, quote=True),
-                    ("<button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this) style=\"margin-left:6px\">📋 复制备注</button>" % html.escape(note, quote=True)) if note else ""))
+        panel_addr = host if host.startswith("http") else "http://" + host
+        install_cmd = "curl -fsSL https://raw.githubusercontent.com/linglala/dnsjiesuo/main/install.sh | bash -s -- %s %s %s" % (
+            n["token"], html.escape(panel_addr), html.escape(n["name"]))
+        ops = ("<button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this)>📋 安装</button> "
+               "<details style=\"display:inline-block;margin-left:8px\"><summary style=\"cursor:pointer;font-size:12px;color:var(--pri)\">⚙ 管理 ▾</summary>"
+               "<div style=\"margin-top:8px;padding:10px;border:1px solid var(--line);border-radius:8px;background:#fbfcfe\">"
+               "<div class=mono style=\"margin-bottom:8px;word-break:break-all\">Token: %s</div>"
+               "<form method=post action=/set_node_note/%d style=\"margin-bottom:8px\"><input name=note value=\"%s\" placeholder=\"备注:用途/负责域名\" style=\"width:100%%;padding:5px 8px\"><button class=ghost style=\"padding:4px 10px;margin-top:4px\">保存备注</button></form>"
+               "<a href=/del_node/%d onclick=\"return confirm('删除该节点?')\">🗑 删除节点</a>"
+               "</div></details>" % (
+                   html.escape(install_cmd, quote=True), n["token"], n["id"],
+                   html.escape(note, quote=True), n["id"]))
+        rows += ("<tr><td>%s</td><td class=mono>%s</td><td>%s</td><td class=mono>%s</td>"
+                 "<td>%.2f GB</td><td>%.2f GB</td><td>%s</td></tr>"
+                 % (nameshow, ipshow, badge, ls, used, total, ops))
     wlrows = "".join("<tr><td class=mono>%s</td><td>%s</td><td><a href=/del_wl/%d onclick=\"return confirm('删除?')\">删除</a></td></tr>"
                      % (html.escape(w["ip"]), html.escape(w["note"] or "-"), w["id"]) for w in wl)
     wlwarn = ""
@@ -300,7 +300,7 @@ def index(request: Request):
             .replace("__MSG__", msg)
             .replace("__CHECKS__", ck_rows)
             .replace("__NN__", str(len(nodes)))
-            .replace("__NODES__", rows or "<tr><td colspan=9 class=muted>暂无节点,点击下方添加</td></tr>")
+            .replace("__NODES__", rows or "<tr><td colspan=7 class=muted>暂无节点,点击下方添加</td></tr>")
             .replace("__WL__", wlrows or "<tr><td colspan=3 class=muted>暂无记录</td></tr>")
             .replace("__WL_WARN__", wlwarn))
     return page(body)
