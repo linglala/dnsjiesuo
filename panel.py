@@ -175,7 +175,25 @@ footer{text-align:center;color:var(--sub);font-size:12px;margin-top:24px}
 __BODY__
 <footer>DNS 解锁面板 v3 &middot; 每 60 秒自动刷新</footer>
 </div>
+<div id=notebox style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:99;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:12px;padding:20px;width:420px;max-width:92vw;box-shadow:0 10px 40px rgba(0,0,0,.2)">
+    <h3 style="font-size:15px;margin-bottom:10px">域名备注</h3>
+    <form id=noteform method=post>
+      <textarea id=noteinput name=note rows=6 style="width:100%" placeholder="每行一个域名/备注,如:&#10;chatgpt.com&#10;奈飞 新加坡机"></textarea>
+      <div style="margin-top:12px;text-align:right">
+        <button type=button class=ghost onclick=closeNote()>取消</button>
+        <button style="margin-left:8px">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
 <script>
+function editNote(id, val){
+  document.getElementById('noteform').action = '/set_node_note/' + id;
+  document.getElementById('noteinput').value = val;
+  document.getElementById('notebox').style.display = 'flex';
+}
+function closeNote(){ document.getElementById('notebox').style.display = 'none'; }
 function copyCmd(btn){
   var t = btn.getAttribute('data-cmd');
   function ok(){ var o=btn.textContent; btn.textContent='✓ 已复制'; btn.classList.add('done');
@@ -201,6 +219,10 @@ LOGIN_HTML = """<div class="card login-box"><h2>🔐 登录</h2>
 
 INDEX_HEAD = """<header><h1><span class=dot></span>DNS 解锁面板</h1><a href=/logout>退出登录</a></header>
 __MSG__
+<div class=card><h2>解锁检测 <span class=n>各节点通过解锁 IP 实测,每 10 分钟更新</span></h2>
+<table><thead><tr><th style="width:14%">节点</th><th>DNS规则</th><th>奈飞</th><th>YouTube</th><th>ChatGPT</th><th>Gemini</th><th>Disney+</th><th style="width:10%">检测时间</th></tr></thead>
+<tbody>__CHECKS__</tbody></table></div>
+
 <div class=card><h2>DNS 节点 <span class=n>共 __NN__ 台</span></h2>
 <table><thead><tr><th style="width:15%">名称</th><th style="width:14%">本机IP</th><th style="width:7%">状态</th><th style="width:10%">最后心跳</th><th style="width:9%">今日流量</th><th style="width:9%">累计流量</th><th>操作</th></tr></thead>
 <tbody>__NODES__</tbody></table>
@@ -229,7 +251,26 @@ def index(request: Request):
     c = db()
     nodes = c.execute("SELECT * FROM nodes ORDER BY id").fetchall()
     wl = c.execute("SELECT * FROM whitelist ORDER BY id").fetchall()
+    checks = {r["node_id"]: (json.loads(r["data"]), r["ts"]) for r in c.execute("SELECT * FROM node_checks").fetchall()}
     c.close()
+    # 检测表
+    ck_rows = ""
+    for n in nodes:
+        data, ts = checks.get(n["id"], ({}, 0))
+        tds = ""
+        for key, label in SERVICES:
+            item = data.get(key)
+            if item is None:
+                tds += "<td><span class='svc unk'>未测</span></td>"
+            elif item.get("ok") is None:
+                tds += "<td><span class='svc unk' title='%s'>未解锁</span></td>" % html.escape(item.get("detail", ""))
+            elif item.get("ok"):
+                tds += "<td><span class='svc ok' title='%s'>%s ✓</span></td>" % (html.escape(item.get("detail", "")), label)
+            else:
+                tds += "<td><span class='svc bad' title='%s'>%s ✗</span></td>" % (html.escape(item.get("detail", "")), label)
+        ck_rows += "<tr><td><b>%s</b></td>%s<td class=mono>%s</td></tr>" % (html.escape(n["name"]), tds, cst(ts))
+    if not nodes:
+        ck_rows = "<tr><td colspan=8 class=muted>暂无节点</td></tr>"
     # 节点表单行
     rows = ""
     for n in nodes:
@@ -246,16 +287,21 @@ def index(request: Request):
         pub = [i for i in sorted(nips) if i not in ("127.0.0.1", "::1")]
         ipshow = "<br>".join(html.escape(i) for i in pub) if pub else "<span class=warn>未上报</span>"
         note = (n["note"] or "").strip()
-        nameshow = html.escape(n["name"]) + ("<br><span class=muted style=\"font-size:12px;white-space:normal;word-break:break-all\">📌 %s</span>" % html.escape(note) if note else "")
+        if note:
+            nameshow = (html.escape(n["name"]) + "<br><span class=muted style=\"font-size:12px;white-space:normal;word-break:break-all\">📌 "
+                        + html.escape(note)
+                        + " <button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this) title=\"复制备注\" style=\"padding:1px 6px;font-size:11px\">📋</button></span>" % html.escape(note, quote=True))
+        else:
+            nameshow = html.escape(n["name"])
         panel_addr = host if host.startswith("http") else "http://" + host
         install_cmd = "curl -fsSL https://raw.githubusercontent.com/linglala/dnsjiesuo/main/install.sh | bash -s -- %s %s %s" % (
             n["token"], html.escape(panel_addr), html.escape(n["name"]))
         ops = ("<div style=\"white-space:nowrap\"><button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this)>📋 复制安装</button> "
                "<a href=\"/del_node/%d\" onclick=\"return confirm('删除该节点?')\" title=\"删除节点\" style=\"font-size:13px;margin-left:6px\">🗑</a> "
-               "<form method=post action=/set_node_note/%d style=\"display:inline;margin-left:8px\"><input name=note value=\"%s\" placeholder=\"备注\" style=\"width:130px;padding:3px 7px;font-size:12px\"><button class=ghost style=\"padding:3px 10px;font-size:12px\">保存</button></form></div>"
+               "<button type=button class=copybtn onclick=\"editNote(%d,'%s')\" style=\"margin-left:8px\">域名备注</button></div>"
                % (
                    html.escape(install_cmd, quote=True), n["id"], n["id"],
-                   html.escape(note, quote=True)))
+                   html.escape(note.replace("\\", "\\\\").replace("'", "\\'"), quote=True)))
         rows += ("<tr><td>%s</td><td class=mono>%s</td><td>%s</td><td class=mono>%s</td>"
                  "<td>%.2f GB</td><td>%.2f GB</td><td>%s</td></tr>"
                  % (nameshow, ipshow, badge, ls, used, total, ops))
@@ -272,6 +318,7 @@ def index(request: Request):
         msg = "<div class='msg errmsg'>✗ 密码修改失败:当前密码错误或两次输入不一致(至少8位)</div>"
     body = (INDEX_HEAD
             .replace("__MSG__", msg)
+            .replace("__CHECKS__", ck_rows)
             .replace("__NN__", str(len(nodes)))
             .replace("__NODES__", rows or "<tr><td colspan=7 class=muted>暂无节点,点击下方添加</td></tr>")
             .replace("__WL__", wlrows or "<tr><td colspan=3 class=muted>暂无记录</td></tr>")
