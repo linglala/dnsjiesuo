@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # DNS 解锁集中管理面板 v3 (FastAPI + SQLite, 单文件)
 # v3: 修改密码 + 节点解锁检测展示
-import os, time, json, sqlite3, secrets, html
+import os, time, json, re, sqlite3, secrets, html
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 import uvicorn
@@ -265,7 +265,14 @@ def index(request: Request):
             elif item.get("ok") is None:
                 tds += "<td><span class='svc unk' title='%s'>未解锁</span></td>" % html.escape(item.get("detail", ""))
             elif item.get("ok"):
-                tds += "<td><span class='svc ok' title='%s'>%s ✓</span></td>" % (html.escape(item.get("detail", "")), label)
+                detail = item.get("detail", "")
+                m = re.search(r"区域[:=]\s*([A-Za-z]{2})", detail)
+                region = m.group(1).upper() if m else ""
+                tag = ""
+                if key == "netflix" and "仅自制剧" in detail:
+                    tag = "·仅自制"
+                txt = "%s(%s)%s" % (label, region, tag) if region else label
+                tds += "<td><span class='svc ok' title='%s'>%s ✓</span></td>" % (html.escape(detail), txt)
             else:
                 tds += "<td><span class='svc bad' title='%s'>%s ✗</span></td>" % (html.escape(item.get("detail", "")), label)
         ck_rows += "<tr><td><b>%s</b></td>%s<td class=mono>%s</td></tr>" % (html.escape(n["name"]), tds, cst(ts))
