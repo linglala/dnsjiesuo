@@ -198,8 +198,8 @@ __MSG__
 <div class=row><span class="big-ip">__UNLOCK_SHOW__</span>
 <form method=post action=/set_unlock class=row><input name=ip value="__UNLOCK_VAL__" placeholder="解锁 VPS 的 IP" style="width:220px"><button>保存</button></form></div></div>
 
-<div class=card><h2>解锁域名 <span class=n>域名,每行一条,自动包含其子域,保存后 30 秒内下发到所有节点</span></h2>
-<form method=post action=/set_domains><textarea name=domains rows=11>__DOMAINS__</textarea>
+<div class=card><h2>解锁域名 <span class=n>格式: 域名 [空格 解锁IP],不带IP走默认;自动包含子域;按顺序匹配,具体域名放泛域名前</span></h2>
+<form method=post action=/set_domains><textarea name=domains rows=12 placeholder="chatgpt.com&#10;netflix.com 203.0.113.5">__DOMAINS__</textarea>
 <div class=row style="margin-top:10px"><button>保存域名</button>
 <button class=ghost form=resetdoms>恢复默认</button></form>
 <form id=resetdoms method=post action=/reset_domains></form></div></div>

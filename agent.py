@@ -27,13 +27,7 @@ COREFILE_TPL = '''.:53 {
 __ALLOW__
         block
     }
-    template IN A __ZONES__ {
-        answer "{{ .Name }} 60 IN A __IP__"
-    }
-    template IN AAAA __ZONES__ {
-        answer "{{ .Name }} 60 IN AAAA ::"
-    }
-    forward . 8.8.8.8 1.1.1.1
+__TEMPLATES__\n    forward . 8.8.8.8 1.1.1.1
     cache 300
     errors
     log
@@ -60,8 +54,36 @@ def read_traffic():
             rx += int(cols[0]); tx += int(cols[8])
     return rx, tx
 
+def parse_domain_rules(domains, default_ip):
+    """域名→IP 映射: 每行 '域名' 或 '域名 IP'。返回 [(ip, [域名...])], 保持输入顺序"""
+    groups = {}
+    order = []
+    for item in domains:
+        parts = item.split()
+        if not parts:
+            continue
+        dom = parts[0]
+        ip = parts[1] if len(parts) > 1 else default_ip
+        if ip not in groups:
+            groups[ip] = []
+            order.append(ip)
+        groups[ip].append(dom)
+    return [(ip, groups[ip]) for ip in order if ip]
+
+def ip_for_domain(domains, default_ip, qname):
+    """找最适合 qname 的映射 IP: 匹配最长后缀,无匹配走默认"""
+    best = None
+    for item in domains:
+        parts = item.split()
+        if not parts:
+            continue
+        dom, ip = parts[0], (parts[1] if len(parts) > 1 else default_ip)
+        if qname == dom or qname.endswith("." + dom):
+            if best is None or len(dom) > len(best[0]):
+                best = (dom, ip)
+    return best[1] if best else default_ip
+
 def render_corefile(unlock_ip, whitelist, domains):
-    zones = " ".join(domains)
     # 本机始终放行(供自检/本地测试),其余按面板白名单
     lines = ["        allow net 127.0.0.1"]
     for ip in whitelist:
@@ -70,9 +92,20 @@ def render_corefile(unlock_ip, whitelist, domains):
     if len(lines) == 1:
         lines.append("        # 白名单为空,外部节点无法查询,请到面板添加")
     allow = "\n".join(lines)
+    # 按解锁IP分组渲染 template 块
+    tpl_blocks = []
+    for ip, doms in parse_domain_rules(domains, unlock_ip):
+        zones = " ".join(doms)
+        tpl_blocks.append(
+            "    template IN A %s {\n"
+            "        answer \"{{ .Name }} 60 IN A %s\"\n"
+            "    }\n"
+            "    template IN AAAA %s {\n"
+            "        answer \"{{ .Name }} 60 IN AAAA ::\"\n"
+            "    }" % (zones, ip, zones))
+    tpl = "\n".join(tpl_blocks)
     return (COREFILE_TPL.replace("__ALLOW__", allow)
-               .replace("__ZONES__", zones)
-               .replace("__IP__", unlock_ip))
+               .replace("__TEMPLATES__", tpl))
 
 # ---------- 解锁检测 ----------
 def https_via(domain, ip, path="/", timeout=8):
@@ -141,18 +174,21 @@ def dns_query_a(server, name, timeout=4):
         i += rdlen
     return ips
 
-def run_checks(unlock_ip):
+def run_checks(unlock_ip, domains):
     out = {}
     # DNS 规则自检: 本机 CoreDNS 是否返回解锁IP
     try:
-        ips = dns_query_a("127.0.0.1", "chatgpt.com")
-        hit = unlock_ip in ips
+        probe = "chatgpt.com"
+        probe_ip = ip_for_domain(domains, unlock_ip, probe)
+        ips = dns_query_a("127.0.0.1", probe)
+        hit = probe_ip in ips
         out["dns"] = {"ok": hit, "detail": ("本机DNS返回: " + ",".join(ips)) if ips else "无解析结果"}
     except Exception as e:
         out["dns"] = {"ok": False, "detail": "DNS查询失败: %s" % e}
     for c in CHECKS:
         try:
-            status, head, body = https_via(c["domain"], unlock_ip, c["path"])
+            check_ip = ip_for_domain(domains, unlock_ip, c["domain"])
+            status, head, body = https_via(c["domain"], check_ip, c["path"])
             if c["kind"] == "code":
                 ok = status in c["ok"]
                 out[c["key"]] = {"ok": ok, "detail": "HTTP %d" % status}
@@ -195,7 +231,7 @@ while True:
         payload = {"name": NAME, "rx": rx, "tx": tx}
         if unlock_ip and time.time() >= next_check:
             print("[%s] running unlock checks..." % time.strftime("%H:%M:%S"), flush=True)
-            payload["checks"] = run_checks(unlock_ip)
+            payload["checks"] = run_checks(unlock_ip, cfg.get("domains") or DOMAINS)
             next_check = time.time() + CHECK_INTERVAL
         api("/api/v1/report", payload)
     except Exception as e:
