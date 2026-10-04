@@ -201,15 +201,28 @@ def nf_region(head):
                     return seg.upper()
     return ""
 
+def nf_follow(answer_ip, path, depth=0):
+    """请求奈飞页面,301/302 跟随重定向(最多2次),返回(状态,响应头,正文)"""
+    status, head, body = https_via_retry("www.netflix.com", answer_ip, path)
+    if status in (301, 302) and depth < 2:
+        loc = ""
+        for line in head.split(b"\r\n"):
+            if line.lower().startswith(b"location:"):
+                loc = line.split(b":", 1)[1].strip().decode("utf-8", "ignore")
+        if "netflix.com" in loc:
+            p = "/" + loc.split("netflix.com", 1)[1].lstrip("/")
+            return nf_follow(answer_ip, p, depth + 1)
+    return status, head, body
+
 def check_netflix(answer_ip):
     """双影片ID探测: 81215567(版权剧) / 80018499(自制剧测试页)"""
     try:
-        status, head, body = https_via_retry("www.netflix.com", answer_ip, "/title/81215567")
+        status, head, body = nf_follow(answer_ip, "/title/81215567")
         region = nf_region(head)
         if status == 200:
             return {"ok": True, "detail": "完整解锁 区域:%s" % (region or "?")}
         if status in (403, 404) or b"page-404" in body or b"NSEZ-403" in body:
-            s2, h2, _ = https_via_retry("www.netflix.com", answer_ip, "/title/80018499")
+            s2, h2, _ = nf_follow(answer_ip, "/title/80018499")
             r2 = nf_region(h2) or region
             if s2 == 200:
                 return {"ok": True, "detail": "仅自制剧 区域:%s" % (r2 or "?")}
