@@ -96,7 +96,7 @@ def render_corefile(answer_ip, whitelist, domains):
            "        answer \"{{ .Name }} 60 IN A %s\"\n"
            "    }\n"
            "    template IN AAAA %s {\n"
-           "        answer \"{{ .Name }} 60 IN AAAA ::\"\n"
+           "        rcode NXDOMAIN\n"
            "    }" % (zones, answer_ip, zones)) if zones else "    # 本节点无负责域名"
     bind = "%s 127.0.0.1" % answer_ip
     return (COREFILE_TPL.replace("__BIND__", bind)
