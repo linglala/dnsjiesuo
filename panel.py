@@ -10,7 +10,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 DB = os.environ.get("PANEL_DB", os.path.join(BASE, "panel.db"))
 app = FastAPI()
 
-DEFAULT_DOMAINS = ['(.*\\.)?(chatgpt|openai|chat|sora|oaistatsig|oaiusercontent|oaistatic|crixet)\\.com\\.?', '(.*\\.)?openaicom\\.imgix\\.net\\.?', '(.*\\.)?arkoselabs\\.com\\.?', '(.*\\.)?(chatgpt|host|turn)\\.livekit\\.cloud\\.?', '(.*\\.)?webpubsub\\.azure\\.com\\.?', '(.*\\.)?gemini\\.google\\.com\\.?', '(.*\\.)?generativelanguage\\.googleapis\\.com\\.?', '(.*\\.)?alkalicore\\.googleapis\\.com\\.?', '(.*\\.)?(jnn-pa|alkalicore|waa-pa\\.clients6)\\.googleapis\\.com\\.?', '(.*\\.)?apis\\.google\\.com\\.?', 'www\\.google\\.com\\.?', 'google\\.com\\.?', '(.*\\.)?ogs\\.google\\.com\\.?']
+DEFAULT_DOMAINS = ['chatgpt.com', 'openai.com', 'chat.com', 'sora.com', 'oaistatsig.com', 'oaiusercontent.com', 'oaistatic.com', 'crixet.com', 'openaicom.imgix.net', 'arkoselabs.com', 'chatgpt.livekit.cloud', 'host.livekit.cloud', 'turn.livekit.cloud', 'webpubsub.azure.com', 'gemini.google.com', 'generativelanguage.googleapis.com', 'alkalicore.googleapis.com', 'jnn-pa.googleapis.com', 'waa-pa.clients6.google.com', 'apis.google.com', 'www.google.com', 'ogs.google.com', 'google.com']
 
 SERVICES = [("dns", "DNS规则"), ("netflix", "奈飞"), ("youtube", "YouTube"), ("chatgpt", "ChatGPT"), ("gemini", "Gemini"), ("disney", "Disney+")]
 
@@ -198,8 +198,8 @@ __MSG__
 <div class=row><span class="big-ip">__UNLOCK_SHOW__</span>
 <form method=post action=/set_unlock class=row><input name=ip value="__UNLOCK_VAL__" placeholder="解锁 VPS 的 IP" style="width:220px"><button>保存</button></form></div></div>
 
-<div class=card><h2>解锁域名 <span class=n>正则,每行一条,保存后 30 秒内下发到所有节点</span></h2>
-<form method=post action=/set_domains><textarea name=domains rows=9>__DOMAINS__</textarea>
+<div class=card><h2>解锁域名 <span class=n>域名,每行一条,自动包含其子域,保存后 30 秒内下发到所有节点</span></h2>
+<form method=post action=/set_domains><textarea name=domains rows=11>__DOMAINS__</textarea>
 <div class=row style="margin-top:10px"><button>保存域名</button>
 <button class=ghost form=resetdoms>恢复默认</button></form>
 <form id=resetdoms method=post action=/reset_domains></form></div></div>

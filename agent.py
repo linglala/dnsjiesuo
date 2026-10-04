@@ -9,7 +9,7 @@ COREFILE = os.environ.get("COREFILE", "/etc/coredns/Corefile")
 INTERVAL = int(os.environ.get("INTERVAL", "30"))
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "600"))   # 解锁检测间隔(秒)
 
-DOMAINS = ['(.*\\.)?(chatgpt|openai|chat|sora|oaistatsig|oaiusercontent|oaistatic|crixet)\\.com\\.?', '(.*\\.)?openaicom\\.imgix\\.net\\.?', '(.*\\.)?arkoselabs\\.com\\.?', '(.*\\.)?(chatgpt|host|turn)\\.livekit\\.cloud\\.?', '(.*\\.)?webpubsub\\.azure\\.com\\.?', '(.*\\.)?gemini\\.google\\.com\\.?', '(.*\\.)?generativelanguage\\.googleapis\\.com\\.?', '(.*\\.)?alkalicore\\.googleapis\\.com\\.?', '(.*\\.)?(jnn-pa|alkalicore|waa-pa\\.clients6)\\.googleapis\\.com\\.?', '(.*\\.)?apis\\.google\\.com\\.?', 'www\\.google\\.com\\.?', 'google\\.com\\.?', '(.*\\.)?ogs\\.google\\.com\\.?']
+DOMAINS = ['chatgpt.com', 'openai.com', 'chat.com', 'sora.com', 'oaistatsig.com', 'oaiusercontent.com', 'oaistatic.com', 'crixet.com', 'openaicom.imgix.net', 'arkoselabs.com', 'chatgpt.livekit.cloud', 'host.livekit.cloud', 'turn.livekit.cloud', 'webpubsub.azure.com', 'gemini.google.com', 'generativelanguage.googleapis.com', 'alkalicore.googleapis.com', 'jnn-pa.googleapis.com', 'waa-pa.clients6.google.com', 'apis.google.com', 'www.google.com', 'ogs.google.com', 'google.com']
 
 # 解锁检测项: 直连解锁IP + SNI, 端到端验证
 CHECKS = [
@@ -29,6 +29,9 @@ __ALLOW__
     }
     template IN A __ZONES__ {
         answer "{{ .Name }} 60 IN A __IP__"
+    }
+    template IN AAAA __ZONES__ {
+        answer "{{ .Name }} 60 IN AAAA ::"
     }
     forward . 8.8.8.8 1.1.1.1
     cache 300
@@ -58,12 +61,12 @@ def read_traffic():
     return rx, tx
 
 def render_corefile(unlock_ip, whitelist, domains):
-    zones = " ".join('"%s"' % d for d in domains)
+    zones = " ".join(domains)
     # 本机始终放行(供自检/本地测试),其余按面板白名单
-    lines = ["        allow 127.0.0.1"]
+    lines = ["        allow net 127.0.0.1"]
     for ip in whitelist:
         if ip not in ("127.0.0.1", "::1"):
-            lines.append("        allow %s" % ip)
+            lines.append("        allow net %s" % ip)
     if len(lines) == 1:
         lines.append("        # 白名单为空,外部节点无法查询,请到面板添加")
     allow = "\n".join(lines)
