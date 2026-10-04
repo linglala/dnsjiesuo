@@ -8,6 +8,8 @@ NAME  = os.environ.get("NODE_NAME", "node")
 COREFILE = os.environ.get("COREFILE", "/etc/coredns/Corefile")
 INTERVAL = int(os.environ.get("INTERVAL", "30"))
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "600"))
+# 额外检测项: 逗号分隔(netflix,youtube,chatgpt,gemini,disney),只测不接流量
+CHECK_EXTRA = [x.strip() for x in os.environ.get("CHECK_EXTRA", "").split(",") if x.strip()]
 
 DOMAINS = ['chatgpt.com', 'openai.com', 'chat.com', 'sora.com', 'oaistatsig.com', 'oaiusercontent.com', 'oaistatic.com', 'crixet.com', 'openaicom.imgix.net', 'arkoselabs.com', 'chatgpt.livekit.cloud', 'host.livekit.cloud', 'turn.livekit.cloud', 'webpubsub.azure.com', 'gemini.google.com', 'generativelanguage.googleapis.com', 'alkalicore.googleapis.com', 'jnn-pa.googleapis.com', 'waa-pa.clients6.google.com', 'apis.google.com', 'www.google.com', 'ogs.google.com', 'google.com']
 
@@ -225,7 +227,7 @@ def run_checks(answer_ip, domains):
     except Exception as e:
         out["dns"] = {"ok": False, "detail": "DNS查询失败: %s" % e}
     for c in CHECKS:
-        if not domain_match(domains, c["domain"]):
+        if not domain_match(domains, c["domain"]) and c["key"] not in CHECK_EXTRA:
             out[c["key"]] = {"ok": None, "detail": "未解锁此服务"}
             continue
         if c["kind"] == "nf":
