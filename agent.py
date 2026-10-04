@@ -204,12 +204,12 @@ def nf_region(head):
 def check_netflix(answer_ip):
     """双影片ID探测: 81215567(版权剧) / 80018499(自制剧测试页)"""
     try:
-        status, head, body = https_via("www.netflix.com", answer_ip, "/title/81215567")
+        status, head, body = https_via_retry("www.netflix.com", answer_ip, "/title/81215567")
         region = nf_region(head)
         if status == 200:
             return {"ok": True, "detail": "完整解锁 区域:%s" % (region or "?")}
         if status in (403, 404) or b"page-404" in body or b"NSEZ-403" in body:
-            s2, h2, _ = https_via("www.netflix.com", answer_ip, "/title/80018499")
+            s2, h2, _ = https_via_retry("www.netflix.com", answer_ip, "/title/80018499")
             r2 = nf_region(h2) or region
             if s2 == 200:
                 return {"ok": True, "detail": "仅自制剧 区域:%s" % (r2 or "?")}
@@ -217,6 +217,20 @@ def check_netflix(answer_ip):
         return {"ok": False, "detail": "HTTP %d" % status}
     except Exception as e:
         return {"ok": False, "detail": "检测异常: %s" % e}
+
+def https_via_retry(domain, ip, path="/", tries=3, timeout=8):
+    """带重试的探测,网络抖动时最多试3次"""
+    last = (0, b"", b"")
+    for i in range(tries):
+        try:
+            r = https_via(domain, ip, path, timeout)
+            if r[0] and r[0] != 0:
+                return r
+            last = r
+        except Exception:
+            pass
+        time.sleep(1 + i)
+    return last
 
 def run_checks(answer_ip, domains):
     out = {}
