@@ -21,7 +21,7 @@ CHECKS = [
 ]
 UNSUPPORTED_LOC = {"CN", "HK", "MO", "RU", "IR", "KP", "CU", "VE", "BY", "SY", "SD"}
 
-COREFILE_TPL = ''':53 {
+COREFILE_TPL = '''.:53 {
     reload
     acl {
 __ALLOW__
