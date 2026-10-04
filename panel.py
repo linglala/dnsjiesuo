@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# DNS 解锁集中管理面板 v2  (FastAPI + SQLite, 单文件)
+# DNS 解锁集中管理面板 v3 (FastAPI + SQLite, 单文件)
+# v3: 修改密码 + 节点解锁检测展示
 import os, time, json, sqlite3, secrets, html
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -11,11 +12,10 @@ app = FastAPI()
 
 DEFAULT_DOMAINS = ['(.*\\.)?(chatgpt|openai|chat|sora|oaistatsig|oaiusercontent|oaistatic|crixet)\\.com\\.?', '(.*\\.)?openaicom\\.imgix\\.net\\.?', '(.*\\.)?arkoselabs\\.com\\.?', '(.*\\.)?(chatgpt|host|turn)\\.livekit\\.cloud\\.?', '(.*\\.)?webpubsub\\.azure\\.com\\.?', '(.*\\.)?gemini\\.google\\.com\\.?', '(.*\\.)?generativelanguage\\.googleapis\\.com\\.?', '(.*\\.)?alkalicore\\.googleapis\\.com\\.?', '(.*\\.)?(jnn-pa|alkalicore|waa-pa\\.clients6)\\.googleapis\\.com\\.?', '(.*\\.)?apis\\.google\\.com\\.?', 'www\\.google\\.com\\.?', 'google\\.com\\.?', '(.*\\.)?ogs\\.google\\.com\\.?']
 
-# ---------- db ----------
+SERVICES = [("dns", "DNS规则"), ("netflix", "奈飞"), ("youtube", "YouTube"), ("chatgpt", "ChatGPT"), ("gemini", "Gemini"), ("disney", "Disney+")]
+
 def db():
-    c = sqlite3.connect(DB)
-    c.row_factory = sqlite3.Row
-    return c
+    c = sqlite3.connect(DB); c.row_factory = sqlite3.Row; return c
 
 def init():
     os.makedirs(os.path.dirname(DB) or ".", exist_ok=True)
@@ -30,9 +30,10 @@ def init():
     CREATE TABLE IF NOT EXISTS traffic(node_id INTEGER, day TEXT,
         rx INTEGER DEFAULT 0, tx INTEGER DEFAULT 0,
         PRIMARY KEY(node_id, day));
+    CREATE TABLE IF NOT EXISTS node_checks(node_id INTEGER PRIMARY KEY,
+        data TEXT, ts REAL DEFAULT 0);
     """)
     c.commit(); c.close()
-    # 初始密码: env 里的非占位密码 > 自动生成随机密码
     if not get_setting("admin_pass"):
         env = os.environ.get("ADMIN_PASS", "changeme").strip()
         if env and env != "changeme":
@@ -64,18 +65,21 @@ def get_domains():
 def logged(req):
     return req.cookies.get("session") == "ok"
 
-# 登录失败锁定(内存级)
-_fails = {"count": 0, "until": 0.0}
+def node_by_token(token):
+    c = db()
+    n = c.execute("SELECT * FROM nodes WHERE token=?", (token,)).fetchone()
+    c.close()
+    return n
 
+_fails = {"count": 0, "until": 0.0}
 init()
 
 # ---------- agent api ----------
 @app.get("/api/v1/config")
 def api_config(request: Request):
-    token = request.headers.get("X-Node-Token", "")
+    n = node_by_token(request.headers.get("X-Node-Token", ""))
+    if not n: raise HTTPException(403, "bad token")
     c = db()
-    if not c.execute("SELECT 1 FROM nodes WHERE token=?", (token,)).fetchone():
-        c.close(); raise HTTPException(403, "bad token")
     wl = [r["ip"] for r in c.execute("SELECT ip FROM whitelist").fetchall()]
     c.close()
     return {"unlock_ip": get_setting("unlock_ip"), "whitelist": wl, "domains": get_domains()}
@@ -102,6 +106,9 @@ async def api_report(request: Request):
         c.execute("UPDATE traffic SET rx=MAX(rx,?), tx=MAX(tx,?) WHERE node_id=? AND day=?", (rx, tx, nid, day))
     else:
         c.execute("INSERT INTO traffic VALUES(?,?,?,?)", (nid, day, rx, tx))
+    if "checks" in body:
+        c.execute("INSERT INTO node_checks VALUES(?,?,?) ON CONFLICT(node_id) DO UPDATE SET data=excluded.data, ts=excluded.ts",
+                  (nid, json.dumps(body["checks"]), time.time()))
     c.commit(); c.close()
     return {"ok": True}
 
@@ -113,7 +120,7 @@ PAGE = """<!doctype html><html lang=zh><head><meta charset=utf-8>
 :root{--bg:#f4f6fb;--card:#fff;--line:#e5e9f2;--text:#1f2733;--sub:#8a94a6;--pri:#4f46e5;--pri2:#4338ca;--ok:#16a34a;--bad:#dc2626;--warn:#d97706}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);font-size:14px}
-.wrap{max-width:1000px;margin:0 auto;padding:24px 16px 60px}
+.wrap{max-width:1040px;margin:0 auto;padding:24px 16px 60px}
 header{display:flex;justify-content:space-between;align-items:center;padding:14px 0 22px}
 h1{font-size:20px;display:flex;align-items:center;gap:8px}
 h1 .dot{width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(22,163,74,.15)}
@@ -129,6 +136,10 @@ tbody tr:hover{background:#fafbff}
 .badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600}
 .badge.on{color:var(--ok);background:#e8f7ee}
 .badge.off{color:var(--sub);background:#eef1f6}
+.svc{display:inline-block;padding:2px 9px;border-radius:6px;font-size:12px;font-weight:600;margin:1px 2px}
+.svc.ok{color:var(--ok);background:#e8f7ee}
+.svc.bad{color:var(--bad);background:#fdecec}
+.svc.unk{color:var(--sub);background:#eef1f6}
 .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--sub)}
 input,textarea{font:inherit;padding:8px 11px;border:1px solid var(--line);border-radius:8px;background:#fbfcfe;outline:none;transition:.15s}
 input:focus,textarea:focus{border-color:var(--pri);background:#fff;box-shadow:0 0 0 3px rgba(79,70,229,.1)}
@@ -138,14 +149,17 @@ button.ghost{background:#eef0f6;color:var(--text)}
 button.ghost:hover{background:#e3e6ef}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .muted{color:var(--sub);font-size:12px}
-.tag-warn{color:var(--warn);font-size:12px}
+.warn{color:var(--warn);font-size:12px}
 textarea{width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.7;resize:vertical}
 footer{text-align:center;color:var(--sub);font-size:12px;margin-top:24px}
 .login-box{max-width:360px;margin:10vh auto 0}
 .big-ip{font-family:ui-monospace,Menlo,monospace;font-weight:700;font-size:16px}
+.msg{padding:9px 13px;border-radius:8px;font-size:13px;margin-bottom:14px}
+.msg.okmsg{color:var(--ok);background:#e8f7ee}
+.msg.errmsg{color:var(--bad);background:#fdecec}
 </style></head><body><div class=wrap>
 __BODY__
-<footer>DNS 解锁面板 &middot; 每 60 秒自动刷新</footer>
+<footer>DNS 解锁面板 v3 &middot; 每 60 秒自动刷新</footer>
 </div></body></html>"""
 
 def page(b): return HTMLResponse(PAGE.replace("__BODY__", b))
@@ -157,6 +171,10 @@ LOGIN_HTML = """<div class="card login-box"><h2>🔐 登录</h2>
 <p class=muted style="margin-top:12px">初始密码见服务器上的 initial_password.txt</p></div>"""
 
 INDEX_HEAD = """<header><h1><span class=dot></span>DNS 解锁面板</h1><a href=/logout>退出登录</a></header>
+__MSG__
+<div class=card><h2>解锁检测 <span class=n>各节点通过解锁 IP 实测,每 10 分钟更新</span></h2>
+<table><thead><tr><th>节点</th><th>DNS规则</th><th>奈飞</th><th>YouTube</th><th>ChatGPT</th><th>Gemini</th><th>Disney+</th><th>检测时间</th></tr></thead>
+<tbody>__CHECKS__</tbody></table></div>
 
 <div class=card><h2>解锁 VPS IP</h2>
 <div class=row><span class="big-ip">__UNLOCK_SHOW__</span>
@@ -178,7 +196,14 @@ INDEX_HEAD = """<header><h1><span class=dot></span>DNS 解锁面板</h1><a href=
 <table><thead><tr><th>IP / CIDR</th><th>备注</th><th></th></tr></thead><tbody>__WL__</tbody></table>
 <div class=row style="margin-top:12px"><b>添加白名单</b>
 <form method=post action=/add_wl class=row><input name=ip placeholder="1.2.3.4" required><input name=note placeholder="备注(可选)"><button>添加</button></form>
-__WL_WARN__</div></div>"""
+__WL_WARN__</div></div>
+
+<div class=card><h2>修改密码</h2>
+<form method=post action=/change_password class=row>
+<input type=password name=old placeholder="当前密码" required>
+<input type=password name=new1 placeholder="新密码(至少8位)" required>
+<input type=password name=new2 placeholder="确认新密码" required>
+<button>修改</button></form></div>"""
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
@@ -186,8 +211,30 @@ def index(request: Request):
     c = db()
     nodes = c.execute("SELECT * FROM nodes ORDER BY id").fetchall()
     wl = c.execute("SELECT * FROM whitelist ORDER BY id").fetchall()
+    checks = {r["node_id"]: (json.loads(r["data"]), r["ts"]) for r in c.execute("SELECT * FROM node_checks").fetchall()}
     c.close()
     unlock = get_setting("unlock_ip")
+    # 检测表
+    ck_rows = ""
+    for n in nodes:
+        data, ts = checks.get(n["id"], ({}, 0))
+        tds = ""
+        for key, label in SERVICES:
+            item = data.get(key)
+            if item is None:
+                tds += "<td><span class='svc unk'>未测</span></td>"
+            elif item.get("ok"):
+                detail = item.get("detail", "")
+                tds += "<td><span class='svc ok' title='%s'>%s ✓</span></td>" % (html.escape(detail), label)
+            else:
+                detail = item.get("detail", "")
+                tds += "<td><span class='svc bad' title='%s'>%s ✗</span></td>" % (html.escape(detail), label)
+        ck_rows += "<tr><td><b>%s</b></td>%s<td class=mono>%s</td></tr>" % (
+            html.escape(n["name"]), tds,
+            time.strftime("%H:%M", time.localtime(ts)) if ts else "-")
+    if not nodes:
+        ck_rows = "<tr><td colspan=8 class=muted>暂无节点</td></tr>"
+    # 节点表
     rows = ""
     for n in nodes:
         on = (time.time() - n["last_seen"]) < 120
@@ -207,9 +254,17 @@ def index(request: Request):
                      % (html.escape(w["ip"]), html.escape(w["note"] or "-"), w["id"]) for w in wl)
     wlwarn = ""
     if not wl:
-        wlwarn = "<p class=tag-warn>⚠ 白名单为空时所有 DNS 节点仅允许本机查询,外部节点无法使用</p>"
+        wlwarn = "<p class=warn>⚠ 白名单为空时所有 DNS 节点仅允许本机查询,外部节点无法使用</p>"
+    msg = ""
+    q = request.query_params
+    if q.get("msg") == "pwok":
+        msg = "<div class='msg okmsg'>✓ 密码修改成功</div>"
+    elif q.get("msg") == "pwbad":
+        msg = "<div class='msg errmsg'>✗ 密码修改失败:当前密码错误或两次输入不一致(至少8位)</div>"
     body = (INDEX_HEAD
-            .replace("__UNLOCK_SHOW__", html.escape(unlock) if unlock else "<span class=tag-warn>未设置! 请填写</span>")
+            .replace("__MSG__", msg)
+            .replace("__CHECKS__", ck_rows)
+            .replace("__UNLOCK_SHOW__", html.escape(unlock) if unlock else "<span class=warn>未设置! 请填写</span>")
             .replace("__UNLOCK_VAL__", html.escape(unlock))
             .replace("__DOMAINS__", html.escape("\n".join(get_domains())))
             .replace("__NN__", str(len(nodes)))
@@ -222,7 +277,7 @@ def index(request: Request):
 def login(p: str = Form(...)):
     now = time.time()
     if now < _fails["until"]:
-        return RedirectResponse("/?locked=1", 302)
+        return RedirectResponse("/", 302)
     if p == get_setting("admin_pass"):
         _fails.update(count=0, until=0.0)
         r = RedirectResponse("/", 302)
@@ -233,6 +288,13 @@ def login(p: str = Form(...)):
         _fails["until"] = now + 60
         _fails["count"] = 0
     return RedirectResponse("/", 302)
+
+@app.post("/change_password")
+def change_password(request: Request, old: str = Form(...), new1: str = Form(...), new2: str = Form(...)):
+    if logged(request) and old == get_setting("admin_pass") and new1 == new2 and len(new1) >= 8:
+        set_setting("admin_pass", new1)
+        return RedirectResponse("/?msg=pwok", 302)
+    return RedirectResponse("/?msg=pwbad", 302)
 
 @app.get("/logout")
 def logout():
@@ -266,7 +328,7 @@ def add_node(request: Request, name: str = Form(...)):
 @app.get("/del_node/{nid}")
 def del_node(request: Request, nid: int):
     if logged(request):
-        c = db(); c.execute("DELETE FROM nodes WHERE id=?", (nid,)); c.execute("DELETE FROM traffic WHERE node_id=?", (nid,)); c.commit(); c.close()
+        c = db(); c.execute("DELETE FROM nodes WHERE id=?", (nid,)); c.execute("DELETE FROM traffic WHERE node_id=?", (nid,)); c.execute("DELETE FROM node_checks WHERE node_id=?", (nid,)); c.commit(); c.close()
     return RedirectResponse("/", 302)
 
 @app.post("/add_wl")
