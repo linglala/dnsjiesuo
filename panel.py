@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-# DNS 解锁集中管理面板 (FastAPI + SQLite)
-# 运行: pip install fastapi uvicorn python-multipart
-#       ADMIN_PASS=你的强密码 uvicorn panel:app --host 0.0.0.0 --port 8080
+# DNS 解锁集中管理面板 v2  (FastAPI + SQLite, 单文件)
 import os, time, json, sqlite3, secrets, html
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 import uvicorn
 
-DB = os.environ.get("PANEL_DB", "/etc/dnspanel/panel.db")
-ADMIN_PASS = os.environ.get("ADMIN_PASS", "admin123")  # 上线必须改!
+BASE = os.path.dirname(os.path.abspath(__file__))
+DB = os.environ.get("PANEL_DB", os.path.join(BASE, "panel.db"))
 app = FastAPI()
 
+DEFAULT_DOMAINS = ['(.*\\.)?(chatgpt|openai|chat|sora|oaistatsig|oaiusercontent|oaistatic|crixet)\\.com\\.?', '(.*\\.)?openaicom\\.imgix\\.net\\.?', '(.*\\.)?arkoselabs\\.com\\.?', '(.*\\.)?(chatgpt|host|turn)\\.livekit\\.cloud\\.?', '(.*\\.)?webpubsub\\.azure\\.com\\.?', '(.*\\.)?gemini\\.google\\.com\\.?', '(.*\\.)?generativelanguage\\.googleapis\\.com\\.?', '(.*\\.)?alkalicore\\.googleapis\\.com\\.?', '(.*\\.)?(jnn-pa|alkalicore|waa-pa\\.clients6)\\.googleapis\\.com\\.?', '(.*\\.)?apis\\.google\\.com\\.?', 'www\\.google\\.com\\.?', 'google\\.com\\.?', '(.*\\.)?ogs\\.google\\.com\\.?']
+
+# ---------- db ----------
 def db():
     c = sqlite3.connect(DB)
     c.row_factory = sqlite3.Row
     return c
 
 def init():
-    os.makedirs(os.path.dirname(DB), exist_ok=True)
+    os.makedirs(os.path.dirname(DB) or ".", exist_ok=True)
     c = db()
-    c.executescript('''
+    c.executescript("""
     CREATE TABLE IF NOT EXISTS nodes(id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT, token TEXT UNIQUE, last_seen REAL DEFAULT 0,
         rx INTEGER DEFAULT 0, tx INTEGER DEFAULT 0, created REAL);
@@ -29,10 +30,22 @@ def init():
     CREATE TABLE IF NOT EXISTS traffic(node_id INTEGER, day TEXT,
         rx INTEGER DEFAULT 0, tx INTEGER DEFAULT 0,
         PRIMARY KEY(node_id, day));
-    ''')
-    c.execute("INSERT OR IGNORE INTO settings VALUES('unlock_ip','')")
+    """)
     c.commit(); c.close()
-init()
+    # 初始密码: env 里的非占位密码 > 自动生成随机密码
+    if not get_setting("admin_pass"):
+        env = os.environ.get("ADMIN_PASS", "changeme").strip()
+        if env and env != "changeme":
+            set_setting("admin_pass", env)
+        else:
+            p = secrets.token_urlsafe(9)
+            try:
+                fp = os.path.join(os.path.dirname(DB), "initial_password.txt")
+                with open(fp, "w") as f: f.write(p + "\n")
+                os.chmod(fp, 0o600)
+            except Exception: pass
+            set_setting("admin_pass", p)
+            print("[panel] 初始密码已生成, 见 initial_password.txt 或本日志:", p, flush=True)
 
 def get_setting(k, d=''):
     c = db(); r = c.execute("SELECT value FROM settings WHERE key=?", (k,)).fetchone(); c.close()
@@ -41,20 +54,22 @@ def get_setting(k, d=''):
 def set_setting(k, v):
     c = db(); c.execute("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, v)); c.commit(); c.close()
 
-def logged(req):
-    return req.cookies.get("session") == "ok"
-
-DEFAULT_DOMAINS = ['(.*\\.)?(chatgpt|openai|chat|sora|oaistatsig|oaiusercontent|oaistatic|crixet)\\.com\\.?', '(.*\\.)?openaicom\\.imgix\\.net\\.?', '(.*\\.)?arkoselabs\\.com\\.?', '(.*\\.)?(chatgpt|host|turn)\\.livekit\\.cloud\\.?', '(.*\\.)?webpubsub\\.azure\\.com\\.?', '(.*\\.)?gemini\\.google\\.com\\.?', '(.*\\.)?generativelanguage\\.googleapis\\.com\\.?', '(.*\\.)?alkalicore\\.googleapis\\.com\\.?', '(.*\\.)?(jnn-pa|alkalicore|waa-pa\\.clients6)\\.googleapis\\.com\\.?', '(.*\\.)?apis\\.google\\.com\\.?', 'www\\.google\\.com\\.?', 'google\\.com\\.?', '(.*\\.)?ogs\\.google\\.com\\.?']
-
 def get_domains():
     try:
         d = json.loads(get_setting("domains", "[]"))
-        return d if d else DEFAULT_DOMAINS
+        return d if d else list(DEFAULT_DOMAINS)
     except Exception:
-        return DEFAULT_DOMAINS
+        return list(DEFAULT_DOMAINS)
 
+def logged(req):
+    return req.cookies.get("session") == "ok"
 
-# ---------- Agent API ----------
+# 登录失败锁定(内存级)
+_fails = {"count": 0, "until": 0.0}
+
+init()
+
+# ---------- agent api ----------
 @app.get("/api/v1/config")
 def api_config(request: Request):
     token = request.headers.get("X-Node-Token", "")
@@ -72,9 +87,8 @@ async def api_report(request: Request):
     c = db()
     n = c.execute("SELECT * FROM nodes WHERE token=?", (token,)).fetchone()
     if not n:
-        name = body.get("name", "node")
         c.execute("INSERT INTO nodes(name,token,created,last_seen) VALUES(?,?,?,?)",
-                  (name, token, time.time(), time.time()))
+                  (body.get("name", "node"), token, time.time(), time.time()))
         nid = c.execute("SELECT last_insert_rowid() AS i").fetchone()["i"]
     else:
         nid = n["id"]
@@ -91,52 +105,89 @@ async def api_report(request: Request):
     c.commit(); c.close()
     return {"ok": True}
 
-# ---------- Web UI ----------
-PAGE = '''<!doctype html><html lang=zh><head><meta charset=utf-8>
+# ---------- ui ----------
+PAGE = """<!doctype html><html lang=zh><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
+<meta http-equiv=refresh content="60">
 <title>DNS 解锁面板</title><style>
-body{font-family:system-ui;max-width:900px;margin:30px auto;padding:0 16px;color:#222}
-table{border-collapse:collapse;width:100%;margin:12px 0}td,th{border:1px solid #ddd;padding:6px 10px;font-size:14px}
-th{background:#f5f5f5}h2{margin-top:28px}.on{color:green;font-weight:bold}.off{color:#999}
-input{padding:6px 8px;margin:4px}button{padding:6px 14px;cursor:pointer}
-.card{border:1px solid #ddd;border-radius:8px;padding:14px;margin:12px 0}
-a{color:#06c}</style></head><body>
-<h1>DNS 解锁面板</h1>
+:root{--bg:#f4f6fb;--card:#fff;--line:#e5e9f2;--text:#1f2733;--sub:#8a94a6;--pri:#4f46e5;--pri2:#4338ca;--ok:#16a34a;--bad:#dc2626;--warn:#d97706}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+.wrap{max-width:1000px;margin:0 auto;padding:24px 16px 60px}
+header{display:flex;justify-content:space-between;align-items:center;padding:14px 0 22px}
+h1{font-size:20px;display:flex;align-items:center;gap:8px}
+h1 .dot{width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(22,163,74,.15)}
+a{color:var(--pri);text-decoration:none}a:hover{text-decoration:underline}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:16px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+.card h2{font-size:15px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.card h2 .n{font-size:12px;color:var(--sub);font-weight:normal}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);font-size:13px}
+th{color:var(--sub);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+tr:last-child td{border-bottom:none}
+tbody tr:hover{background:#fafbff}
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600}
+.badge.on{color:var(--ok);background:#e8f7ee}
+.badge.off{color:var(--sub);background:#eef1f6}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--sub)}
+input,textarea{font:inherit;padding:8px 11px;border:1px solid var(--line);border-radius:8px;background:#fbfcfe;outline:none;transition:.15s}
+input:focus,textarea:focus{border-color:var(--pri);background:#fff;box-shadow:0 0 0 3px rgba(79,70,229,.1)}
+button{font:inherit;font-weight:600;padding:8px 16px;border:none;border-radius:8px;background:var(--pri);color:#fff;cursor:pointer;transition:.15s}
+button:hover{background:var(--pri2)}
+button.ghost{background:#eef0f6;color:var(--text)}
+button.ghost:hover{background:#e3e6ef}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.muted{color:var(--sub);font-size:12px}
+.tag-warn{color:var(--warn);font-size:12px}
+textarea{width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.7;resize:vertical}
+footer{text-align:center;color:var(--sub);font-size:12px;margin-top:24px}
+.login-box{max-width:360px;margin:10vh auto 0}
+.big-ip{font-family:ui-monospace,Menlo,monospace;font-weight:700;font-size:16px}
+</style></head><body><div class=wrap>
 __BODY__
-</body></html>'''
+<footer>DNS 解锁面板 &middot; 每 60 秒自动刷新</footer>
+</div></body></html>"""
 
-def page(body):
-    return HTMLResponse(PAGE.replace("__BODY__", body))
+def page(b): return HTMLResponse(PAGE.replace("__BODY__", b))
 
-LOGIN_HTML = ("<div class=card><h3>登录</h3><form method=post action=/login>"
-              "密码: <input type=password name=p><button>进入</button></form></div>")
+LOGIN_HTML = """<div class="card login-box"><h2>🔐 登录</h2>
+<form method=post action=/login class=row style="flex-direction:column;align-items:stretch">
+<input type=password name=p placeholder="管理密码" autofocus>
+<button>登录</button></form>
+<p class=muted style="margin-top:12px">初始密码见服务器上的 initial_password.txt</p></div>"""
 
-INDEX_BODY = '''<div class=card><b>解锁 VPS IP:</b> %s
-<form method=post action=/set_unlock style="display:inline"> <input name=ip value="%s" placeholder="解锁VPS的IP">
-<button>保存</button></form></div>
-<div class=card><b>解锁域名 (正则,每行一条):</b>
-<form method=post action=/set_domains><textarea name=domains rows=7 style="width:100%%">%s</textarea>
-<button>保存</button></form></div>
-<h2>DNS 节点 (%d)</h2>
-<table><tr><th>ID</th><th>名称</th><th>Token</th><th>状态</th><th>最后心跳</th><th>今日流量</th><th>累计流量</th><th></th></tr>%s</table>
-<div class=card><b>添加节点</b><form method=post action=/add_node>
-<input name=name placeholder="节点名称,如 dns-东京1" required> <button>生成 Token</button></form></div>
-<h2>IP 白名单 (%d)</h2>
-<table><tr><th>IP / CIDR</th><th>备注</th><th></th></tr>%s</table>
-<div class=card><b>添加白名单 IP</b> <span style="color:#888">(支持 CIDR,如 1.2.3.0/24)</span>
-<form method=post action=/add_wl><input name=ip placeholder="1.2.3.4" required>
-<input name=note placeholder="备注"> <button>添加</button></form></div>
-<p><a href=/logout>退出登录</a></p>'''
+INDEX_HEAD = """<header><h1><span class=dot></span>DNS 解锁面板</h1><a href=/logout>退出登录</a></header>
+
+<div class=card><h2>解锁 VPS IP</h2>
+<div class=row><span class="big-ip">__UNLOCK_SHOW__</span>
+<form method=post action=/set_unlock class=row><input name=ip value="__UNLOCK_VAL__" placeholder="解锁 VPS 的 IP" style="width:220px"><button>保存</button></form></div></div>
+
+<div class=card><h2>解锁域名 <span class=n>正则,每行一条,保存后 30 秒内下发到所有节点</span></h2>
+<form method=post action=/set_domains><textarea name=domains rows=9>__DOMAINS__</textarea>
+<div class=row style="margin-top:10px"><button>保存域名</button>
+<button class=ghost form=resetdoms>恢复默认</button></form>
+<form id=resetdoms method=post action=/reset_domains></form></div></div>
+
+<div class=card><h2>DNS 节点 <span class=n>共 __NN__ 台</span></h2>
+<table><thead><tr><th>ID</th><th>名称</th><th>Token</th><th>状态</th><th>最后心跳</th><th>今日流量</th><th>累计流量</th><th></th></tr></thead>
+<tbody>__NODES__</tbody></table>
+<div class=row style="margin-top:12px"><b>添加节点</b>
+<form method=post action=/add_node class=row><input name=name placeholder="节点名称,如 dns-东京1" required><button>生成 Token</button></form></div></div>
+
+<div class=card><h2>IP 白名单 <span class=n>支持 CIDR,如 1.2.3.0/24</span></h2>
+<table><thead><tr><th>IP / CIDR</th><th>备注</th><th></th></tr></thead><tbody>__WL__</tbody></table>
+<div class=row style="margin-top:12px"><b>添加白名单</b>
+<form method=post action=/add_wl class=row><input name=ip placeholder="1.2.3.4" required><input name=note placeholder="备注(可选)"><button>添加</button></form>
+__WL_WARN__</div></div>"""
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
-    if not logged(request):
-        return page(LOGIN_HTML)
+    if not logged(request): return page(LOGIN_HTML)
     c = db()
     nodes = c.execute("SELECT * FROM nodes ORDER BY id").fetchall()
     wl = c.execute("SELECT * FROM whitelist ORDER BY id").fetchall()
     c.close()
-    unlock_ip = html.escape(get_setting("unlock_ip"))
+    unlock = get_setting("unlock_ip")
     rows = ""
     for n in nodes:
         on = (time.time() - n["last_seen"]) < 120
@@ -146,26 +197,41 @@ def index(request: Request):
         c2.close()
         used = ((n["rx"]-(t["rx"] if t else 0))+(n["tx"]-(t["tx"] if t else 0)))/1e9 if n["last_seen"] else 0
         total = (n["rx"]+n["tx"])/1e9
-        status = "在线" if on else "离线"
-        cls = "on" if on else "off"
-        ls = time.strftime("%H:%M:%S", time.localtime(n["last_seen"])) if n["last_seen"] else "-"
-        rows += ("<tr><td>%d</td><td>%s</td><td>%s…</td><td class=%s>%s</td><td>%s</td>"
-                 "<td>%.2f GB</td><td>%.2f GB</td><td><a href=/del_node/%d onclick=\"return confirm('删除?')\">删</a></td></tr>"
-                 % (n["id"], html.escape(n["name"]), n["token"][:8], cls, status, ls, used, total, n["id"]))
-    wlrows = "".join("<tr><td>%s</td><td>%s</td><td><a href=/del_wl/%d onclick=\"return confirm('删除?')\">删</a></td></tr>"
-                     % (html.escape(w["ip"]), html.escape(w["note"]), w["id"]) for w in wl)
-    body = INDEX_BODY % (
-        unlock_ip or '<span style=color:red>未设置!</span>', unlock_ip,
-        "\n".join(get_domains()),
-        len(nodes), rows or "<tr><td colspan=8>暂无节点</td></tr>",
-        len(wl), wlrows or "<tr><td colspan=3>暂无,任何人都能查询,危险!</td></tr>")
+        badge = "<span class=badge on>在线</span>" if on else "<span class=badge off>离线</span>"
+        ls = time.strftime("%m-%d %H:%M:%S", time.localtime(n["last_seen"])) if n["last_seen"] else "-"
+        rows += ("<tr><td>%d</td><td>%s</td><td class=mono>%s…</td><td>%s</td><td class=mono>%s</td>"
+                 "<td>%.2f GB</td><td>%.2f GB</td>"
+                 "<td><a href=/del_node/%d onclick=\"return confirm('删除该节点?')\">删除</a></td></tr>"
+                 % (n["id"], html.escape(n["name"]), n["token"][:8], badge, ls, used, total, n["id"]))
+    wlrows = "".join("<tr><td class=mono>%s</td><td>%s</td><td><a href=/del_wl/%d onclick=\"return confirm('删除?')\">删除</a></td></tr>"
+                     % (html.escape(w["ip"]), html.escape(w["note"] or "-"), w["id"]) for w in wl)
+    wlwarn = ""
+    if not wl:
+        wlwarn = "<p class=tag-warn>⚠ 白名单为空时所有 DNS 节点仅允许本机查询,外部节点无法使用</p>"
+    body = (INDEX_HEAD
+            .replace("__UNLOCK_SHOW__", html.escape(unlock) if unlock else "<span class=tag-warn>未设置! 请填写</span>")
+            .replace("__UNLOCK_VAL__", html.escape(unlock))
+            .replace("__DOMAINS__", html.escape("\n".join(get_domains())))
+            .replace("__NN__", str(len(nodes)))
+            .replace("__NODES__", rows or "<tr><td colspan=8 class=muted>暂无节点,点击下方添加</td></tr>")
+            .replace("__WL__", wlrows or "<tr><td colspan=3 class=muted>暂无记录</td></tr>")
+            .replace("__WL_WARN__", wlwarn))
     return page(body)
 
 @app.post("/login")
 def login(p: str = Form(...)):
-    if p == ADMIN_PASS:
-        r = RedirectResponse("/", 302); r.set_cookie("session", "ok", max_age=86400*30)
+    now = time.time()
+    if now < _fails["until"]:
+        return RedirectResponse("/?locked=1", 302)
+    if p == get_setting("admin_pass"):
+        _fails.update(count=0, until=0.0)
+        r = RedirectResponse("/", 302)
+        r.set_cookie("session", "ok", max_age=86400*30, httponly=True, samesite="lax")
         return r
+    _fails["count"] += 1
+    if _fails["count"] >= 5:
+        _fails["until"] = now + 60
+        _fails["count"] = 0
     return RedirectResponse("/", 302)
 
 @app.get("/logout")
@@ -182,6 +248,12 @@ def set_domains(request: Request, domains: str = Form(...)):
     if logged(request):
         lines = [l.strip() for l in domains.replace("\r", "").split("\n") if l.strip()]
         set_setting("domains", json.dumps(lines))
+    return RedirectResponse("/", 302)
+
+@app.post("/reset_domains")
+def reset_domains(request: Request):
+    if logged(request):
+        c = db(); c.execute("DELETE FROM settings WHERE key='domains'"); c.commit(); c.close()
     return RedirectResponse("/", 302)
 
 @app.post("/add_node")

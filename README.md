@@ -38,18 +38,23 @@ V2bX 节点 ──查询(白名单放行)──▶ DNS机器×N (CoreDNS)
 ### 1. 面板机
 
 ```bash
-apt update && apt install -y python3 python3-pip
-pip3 install fastapi uvicorn python-multipart
-mkdir -p /etc/dnspanel && cd /etc/dnspanel
-# 上传 panel.py 到当前目录
+apt update && apt install -y python3 python3-pip git
+git clone https://github.com/linglala/dnsjiesuo.git /etc/dnspanel
+cd /etc/dnspanel
 
-sed -i 's/ADMIN_PASS=改成强密码/ADMIN_PASS=你的强密码/' panel.service
+python3 -m venv venv
+venv/bin/pip install fastapi uvicorn python-multipart
+
 cp panel.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now panel
-ufw allow 8080   # 或对应防火墙/云安全组放行 8080
+
+cat initial_password.txt    # 查看自动生成的初始密码
+ufw allow 8080              # 或对应防火墙/云安全组放行 8080
 ```
 
-浏览器打开 `http://面板IP:8080`，登录后：设置解锁 VPS IP → 添加节点拿 Token → 加白名单 IP。
+浏览器打开 `http://面板IP:8080`，用初始密码登录后：设置解锁 VPS IP → 添加节点拿 Token → 加白名单 IP。
+
+> 想自定义密码: `sed -i 's/ADMIN_PASS=changeme/ADMIN_PASS=你的密码/' /etc/systemd/system/panel.service && systemctl daemon-reload && systemctl restart panel`
 
 ### 2. 每台 DNS 机器
 

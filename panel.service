@@ -3,8 +3,10 @@ Description=DNS Unlock Panel
 After=network.target
 
 [Service]
-Environment=ADMIN_PASS=改成强密码
-ExecStart=/usr/bin/python3 -m uvicorn panel:app --host 0.0.0.0 --port 8080 --app-dir /etc/dnspanel
+# 安装时先: python3 -m venv /etc/dnspanel/venv && /etc/dnspanel/venv/bin/pip install fastapi uvicorn python-multipart
+# 密码留 changeme 则首次启动自动生成随机密码,见 /etc/dnspanel/initial_password.txt
+Environment=ADMIN_PASS=changeme
+ExecStart=/etc/dnspanel/venv/bin/python -m uvicorn panel:app --host 0.0.0.0 --port 8080 --app-dir /etc/dnspanel
 WorkingDirectory=/etc/dnspanel
 Restart=always
 RestartSec=5
