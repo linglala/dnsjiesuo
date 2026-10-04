@@ -208,6 +208,9 @@ __WL_WARN__</div></div>
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     if not logged(request): return page(LOGIN_HTML)
+    host = request.headers.get("host", "面板IP:8080")
+    if host.startswith("localhost") or host.startswith("127."):
+        host = "面板IP:8080"
     c = db()
     nodes = c.execute("SELECT * FROM nodes ORDER BY id").fetchall()
     wl = c.execute("SELECT * FROM whitelist ORDER BY id").fetchall()
@@ -246,10 +249,13 @@ def index(request: Request):
         total = (n["rx"]+n["tx"])/1e9
         badge = "<span class=badge on>在线</span>" if on else "<span class=badge off>离线</span>"
         ls = time.strftime("%m-%d %H:%M:%S", time.localtime(n["last_seen"])) if n["last_seen"] else "-"
+        install_cmd = "curl -fsSL https://raw.githubusercontent.com/linglala/dnsjiesuo/main/install.sh | bash -s -- %s %s %s" % (
+            n["token"], html.escape(host), html.escape(n["name"]))
         rows += ("<tr><td>%d</td><td>%s</td><td class=mono>%s…</td><td>%s</td><td class=mono>%s</td>"
                  "<td>%.2f GB</td><td>%.2f GB</td>"
                  "<td><a href=/del_node/%d onclick=\"return confirm('删除该节点?')\">删除</a></td></tr>"
-                 % (n["id"], html.escape(n["name"]), n["token"][:8], badge, ls, used, total, n["id"]))
+                 "<tr><td></td><td colspan=7 class=mono style=\"white-space:nowrap;overflow-x:auto\">一键安装: %s</td></tr>"
+                 % (n["id"], html.escape(n["name"]), n["token"][:8], badge, ls, used, total, n["id"], install_cmd))
     wlrows = "".join("<tr><td class=mono>%s</td><td>%s</td><td><a href=/del_wl/%d onclick=\"return confirm('删除?')\">删除</a></td></tr>"
                      % (html.escape(w["ip"]), html.escape(w["note"] or "-"), w["id"]) for w in wl)
     wlwarn = ""

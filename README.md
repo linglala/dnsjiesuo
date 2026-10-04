@@ -58,19 +58,15 @@ ufw allow 8080              # 或对应防火墙/云安全组放行 8080
 
 > 想自定义密码: `sed -i 's/ADMIN_PASS=changeme/ADMIN_PASS=你的密码/' /etc/systemd/system/panel.service && systemctl daemon-reload && systemctl restart panel`
 
-### 2. 每台 DNS 机器
+### 2. 每台 DNS 机器(一键安装)
+
+在面板"添加节点"生成 Token 后,节点表会显示一键命令,直接复制到 DNS 机器上执行即可:
 
 ```bash
-# 安装 docker 后:
-mkdir -p /etc/coredns /etc/dnspanel
-# 上传 docker-compose.yml 到 /etc/coredns/,上传 agent.py 到 /etc/dnspanel/
-cd /etc/coredns && docker compose up -d
-ufw allow 53 && ufw allow 53/udp
-
-# 改 agent.service 三处环境变量后:
-cp agent.service /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now agent
+curl -fsSL https://raw.githubusercontent.com/linglala/dnsjiesuo/main/install.sh | bash -s -- <TOKEN> <面板地址> [节点名]
 ```
+
+脚本自动完成: 装 docker → 部署 CoreDNS → 部署 agent → 放行 53 端口。
 
 ### 3. V2bX 节点接入
 
