@@ -33,11 +33,11 @@ def init():
     CREATE TABLE IF NOT EXISTS node_checks(node_id INTEGER PRIMARY KEY,
         data TEXT, ts REAL DEFAULT 0);
     """)
-    try:
-        c.execute("ALTER TABLE nodes ADD COLUMN ips TEXT DEFAULT ''")
-        c.execute("ALTER TABLE nodes ADD COLUMN domains TEXT DEFAULT ''")
-    except Exception:
-        pass
+    for col in ("ips", "domains"):
+        try:
+            c.execute("ALTER TABLE nodes ADD COLUMN %s TEXT DEFAULT ''" % col)
+        except Exception:
+            pass
     c.commit(); c.close()
     if not get_setting("admin_pass"):
         env = os.environ.get("ADMIN_PASS", "changeme").strip()
@@ -80,22 +80,6 @@ _fails = {"count": 0, "until": 0.0}
 init()
 
 # ---------- agent api ----------
-def node_domains(n):
-    """节点负责的域名: 优先节点自己的配置; 否则旧版全局映射中指向本机的"""
-    if n["domains"]:
-        return [l.strip() for l in n["domains"].replace("\r", "").split("\n") if l.strip()]
-    ips = set((n["ips"] or "").split(","))
-    unlock0 = get_setting("unlock_ip")
-    out = []
-    for line in get_domains():
-        parts = line.split()
-        if not parts:
-            continue
-        ip = parts[1] if len(parts) > 1 else unlock0
-        if ip in ips:
-            out.append(parts[0])
-    return out
-
 @app.get("/api/v1/config")
 def api_config(request: Request):
     n = node_by_token(request.headers.get("X-Node-Token", ""))
@@ -105,7 +89,8 @@ def api_config(request: Request):
     c.close()
     nips = [i for i in (n["ips"] or "").split(",") if i and i not in ("127.0.0.1", "::1")]
     answer_ip = nips[0] if nips else get_setting("unlock_ip")
-    return {"answer_ip": answer_ip, "unlock_ip": answer_ip, "whitelist": wl, "domains": node_domains(n)}
+    domains = [l.split()[0] for l in get_domains() if l.split()]
+    return {"answer_ip": answer_ip, "unlock_ip": answer_ip, "whitelist": wl, "domains": domains}
 
 @app.post("/api/v1/report")
 async def api_report(request: Request):
@@ -231,16 +216,16 @@ __MSG__
 <form method=post action=/add_wl class=row><input name=ip placeholder="1.2.3.4" required><input name=note placeholder="备注(可选)"><button>添加</button></form>
 __WL_WARN__</div></div>
 
-<details style="margin-bottom:16px"><summary style="cursor:pointer;color:var(--sub);font-size:13px;padding:8px 0">🔧 全局默认配置(旧版兼容 / 新节点模板) ▾</summary>
-<div class=card><h2>默认解锁 IP <span class=n>仅作旧版回退,集群模式下各节点用自己的公网IP应答</span></h2>
-<div class=row><span class="big-ip">__UNLOCK_SHOW__</span>
-<form method=post action=/set_unlock class=row><input name=ip value="__UNLOCK_VAL__" placeholder="解锁 VPS 的 IP" style="width:220px"><button>保存</button></form></div></div>
-
-<div class=card><h2>默认域名列表 <span class=n>节点未单独配置时,按"域名 [解锁IP]"解析,IP指向哪台就由哪台负责</span></h2>
+<div class=card><h2>解锁域名 <span class=n>所有节点共用此名单并各自回答自己的公网IP; 分流由 V2bX dns.json 决定; 每行一个域名,自动含子域</span></h2>
 <form method=post action=/set_domains><textarea name=domains rows=11>__DOMAINS__</textarea>
 <div class=row style="margin-top:10px"><button>保存域名</button>
 <button class=ghost form=resetdoms>恢复默认</button></form>
 <form id=resetdoms method=post action=/reset_domains></form></div></div>
+
+<details style="margin-bottom:16px"><summary style="cursor:pointer;color:var(--sub);font-size:13px;padding:8px 0">🔧 备用解锁 IP(节点未上报公网IP时的回退值,一般不用) ▾</summary>
+<div class=card><h2>备用解锁 IP</h2>
+<div class=row><span class="big-ip">__UNLOCK_SHOW__</span>
+<form method=post action=/set_unlock class=row><input name=ip value="__UNLOCK_VAL__" placeholder="解锁 VPS 的 IP" style="width:220px"><button>保存</button></form></div></div>
 </details>
 
 <div class=card><h2>修改密码</h2>
@@ -300,17 +285,13 @@ def index(request: Request):
         install_cmd = "curl -fsSL https://raw.githubusercontent.com/linglala/dnsjiesuo/main/install.sh | bash -s -- %s %s %s" % (
             n["token"], html.escape(panel_addr), html.escape(n["name"]))
         nips = set((n["ips"] or "").split(",")) if n["ips"] else set()
-        n_dom = node_domains(n)
-        mine = len(n_dom)
+        mine = len(get_domains())
         ipshow = "<br>".join(html.escape(i) for i in sorted(nips)) if nips else "<span class=warn>未上报</span>"
         rows += ("<tr><td>%d</td><td>%s</td><td class=mono>%s…</td><td class=mono>%s</td><td>%d 条</td><td>%s</td><td class=mono>%s</td>"
                  "<td>%.2f GB</td><td>%.2f GB</td>"
                  "<td><a href=/del_node/%d onclick=\"return confirm('删除该节点?')\">删除</a></td></tr>"
-                 "<tr><td></td><td colspan=9><button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this)>📋 复制一键安装命令</button> "
-                 "<details style=\"display:inline-block;margin-left:10px\"><summary style=\"cursor:pointer;font-size:12px;color:var(--pri)\">负责域名 (%d 条) ▾</summary>"
-                 "<form method=post action=/set_node_domains/%d style=\"margin-top:6px\"><textarea name=domains rows=6 style=\"width:420px\">%s</textarea><br>"
-                 "<button style=\"margin-top:4px\">保存</button> <span class=muted>留空则继承全局默认;每行一个域名,自动含子域</span></form></details></td></tr>"
-                 % (n["id"], html.escape(n["name"]), n["token"][:8], ipshow, mine, badge, ls, used, total, n["id"], html.escape(install_cmd, quote=True), mine, n["id"], html.escape("\n".join(n_dom))))
+                 "<tr><td></td><td colspan=9><button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this)>📋 复制一键安装命令</button> <span class=muted>所有节点共用上方解锁域名名单,各自回答自己的公网IP</span></td></tr>"
+                 % (n["id"], html.escape(n["name"]), n["token"][:8], ipshow, mine, badge, ls, used, total, n["id"], html.escape(install_cmd, quote=True)))
     wlrows = "".join("<tr><td class=mono>%s</td><td>%s</td><td><a href=/del_wl/%d onclick=\"return confirm('删除?')\">删除</a></td></tr>"
                      % (html.escape(w["ip"]), html.escape(w["note"] or "-"), w["id"]) for w in wl)
     wlwarn = ""
