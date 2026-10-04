@@ -267,8 +267,9 @@ def index(request: Request):
         total = (n["rx"]+n["tx"])/1e9
         badge = "<span class=badge on>在线</span>" if on else "<span class=badge off>离线</span>"
         ls = time.strftime("%m-%d %H:%M:%S", time.localtime(n["last_seen"])) if n["last_seen"] else "-"
+        panel_addr = host if host.startswith("http") else "http://" + host
         install_cmd = "curl -fsSL https://raw.githubusercontent.com/linglala/dnsjiesuo/main/install.sh | bash -s -- %s %s %s" % (
-            n["token"], html.escape(host), html.escape(n["name"]))
+            n["token"], html.escape(panel_addr), html.escape(n["name"]))
         rows += ("<tr><td>%d</td><td>%s</td><td class=mono>%s…</td><td>%s</td><td class=mono>%s</td>"
                  "<td>%.2f GB</td><td>%.2f GB</td>"
                  "<td><a href=/del_node/%d onclick=\"return confirm('删除该节点?')\">删除</a></td></tr>"

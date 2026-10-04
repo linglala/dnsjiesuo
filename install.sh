@@ -9,6 +9,12 @@ NAME="${3:-$(hostname)}"
 
 REPO="https://raw.githubusercontent.com/linglala/dnsjiesuo/main"
 
+# 地址补协议头
+case "$PANEL" in
+    http://*|https://*) ;;
+    *) PANEL="http://$PANEL" ;;
+esac
+
 if [ -z "$TOKEN" ] || [ -z "$PANEL" ]; then
     echo "用法: install.sh <TOKEN> <面板地址如 http://1.2.3.4:8080> [节点名]"
     exit 1
@@ -24,6 +30,12 @@ fi
 # 2. CoreDNS
 echo "==> 部署 CoreDNS..."
 mkdir -p /etc/coredns
+# 防止 Docker 把不存在的挂载点建成目录
+if [ -d /etc/coredns/Corefile ]; then
+    echo "==> 发现 /etc/coredns/Corefile 是目录(旧bug残留), 修复..."
+    rm -rf /etc/coredns/Corefile
+fi
+touch /etc/coredns/Corefile
 cd /etc/coredns
 if [ ! -f docker-compose.yml ]; then
     curl -fsSL -o docker-compose.yml "$REPO/docker-compose.yml"
