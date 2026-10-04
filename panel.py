@@ -132,15 +132,15 @@ PAGE = """<!doctype html><html lang=zh><head><meta charset=utf-8>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);font-size:14px}
 .wrap{max-width:1480px;margin:0 auto;padding:20px 24px 60px}
-header{display:flex;justify-content:space-between;align-items:center;padding:14px 0 22px}
+header{display:flex;justify-content:space-between;align-items:center;padding:8px 0 12px}
 h1{font-size:20px;display:flex;align-items:center;gap:8px}
 h1 .dot{width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(22,163,74,.15)}
 a{color:var(--pri);text-decoration:none}a:hover{text-decoration:underline}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:16px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
-.card h2{font-size:15px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+.card h2{font-size:14px;margin-bottom:8px;display:flex;align-items:center;gap:8px}
 .card h2 .n{font-size:12px;color:var(--sub);font-weight:normal}
 table{width:100%;border-collapse:collapse}
-th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);font-size:13px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);font-size:13px}
 th{color:var(--sub);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
 tr:last-child td{border-bottom:none}
 tbody tr:hover{background:#fafbff}
@@ -206,7 +206,7 @@ __MSG__
 <tbody>__CHECKS__</tbody></table></div>
 
 <div class=card><h2>DNS 节点 <span class=n>共 __NN__ 台</span></h2>
-<table><thead><tr><th>名称</th><th>本机IP</th><th>状态</th><th>最后心跳</th><th>今日流量</th><th>累计流量</th><th style="width:210px">操作</th></tr></thead>
+<table><thead><tr><th>名称</th><th>本机IP</th><th>状态</th><th>最后心跳</th><th>今日流量</th><th>累计流量</th><th style="width:250px">操作</th></tr></thead>
 <tbody>__NODES__</tbody></table>
 <div class=row style="margin-top:12px"><b>添加节点</b>
 <form method=post action=/add_node class=row><input name=name placeholder="节点名称,如 dns-东京1" required><button>生成 Token</button></form></div></div>
@@ -274,14 +274,11 @@ def index(request: Request):
         install_cmd = "curl -fsSL https://raw.githubusercontent.com/linglala/dnsjiesuo/main/install.sh | bash -s -- %s %s %s" % (
             n["token"], html.escape(panel_addr), html.escape(n["name"]))
         ops = ("<button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this)>📋 安装</button> "
-               "<details style=\"display:inline-block;margin-left:8px\"><summary style=\"cursor:pointer;font-size:12px;color:var(--pri)\">⚙ 管理 ▾</summary>"
-               "<div style=\"margin-top:8px;padding:10px;border:1px solid var(--line);border-radius:8px;background:#fbfcfe\">"
-               "<div class=mono style=\"margin-bottom:8px;word-break:break-all\">Token: %s</div>"
-               "<form method=post action=/set_node_note/%d style=\"margin-bottom:8px\"><input name=note value=\"%s\" placeholder=\"备注:用途/负责域名\" style=\"width:100%%;padding:5px 8px\"><button class=ghost style=\"padding:4px 10px;margin-top:4px\">保存备注</button></form>"
-               "<a href=/del_node/%d onclick=\"return confirm('删除该节点?')\">🗑 删除节点</a>"
-               "</div></details>" % (
-                   html.escape(install_cmd, quote=True), n["token"], n["id"],
-                   html.escape(note, quote=True), n["id"]))
+               "<form method=post action=/set_node_note/%d style=\"display:inline;margin-left:6px\"><input name=note value=\"%s\" placeholder=\"备注\" style=\"width:110px;padding:3px 7px;font-size:12px\"><button class=ghost style=\"padding:3px 8px;font-size:12px\">存</button></form> "
+               "<span class=mono title=\"%s\" style=\"font-size:11px\">%s…</span> "
+               "<a href=/del_node/%d onclick=\"return confirm('删除该节点?')\" style=\"font-size:12px\">🗑</a>" % (
+                   html.escape(install_cmd, quote=True), n["id"],
+                   html.escape(note, quote=True), n["token"], n["token"][:10], n["id"]))
         rows += ("<tr><td>%s</td><td class=mono>%s</td><td>%s</td><td class=mono>%s</td>"
                  "<td>%.2f GB</td><td>%.2f GB</td><td>%s</td></tr>"
                  % (nameshow, ipshow, badge, ls, used, total, ops))
