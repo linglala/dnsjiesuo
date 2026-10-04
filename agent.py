@@ -54,6 +54,33 @@ def read_traffic():
             rx += int(cols[0]); tx += int(cols[8])
     return rx, tx
 
+def my_ips():
+    """本机所有相关 IP: 回环 + 主公网IP(UDP探测) + 环境变量 NODE_IPS 额外指定"""
+    ips = {"127.0.0.1", "::1"}
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))   # 不真正发包,仅取本机主IP
+        ips.add(s.getsockname()[0])
+        s.close()
+    except Exception:
+        pass
+    for ip in os.environ.get("NODE_IPS", "").split(","):
+        if ip.strip():
+            ips.add(ip.strip())
+    return ips
+
+def my_rules(domains, default_ip, ips):
+    """只保留解锁IP指向本机的规则,其余由别的节点负责"""
+    out = []
+    for item in domains:
+        parts = item.split()
+        if not parts:
+            continue
+        ip = parts[1] if len(parts) > 1 else default_ip
+        if ip in ips:
+            out.append(item)
+    return out
+
 def parse_domain_rules(domains, default_ip):
     """域名→IP 映射: 每行 '域名' 或 '域名 IP'。返回 [(ip, [域名...])], 保持输入顺序"""
     groups = {}
@@ -174,20 +201,26 @@ def dns_query_a(server, name, timeout=4):
         i += rdlen
     return ips
 
-def run_checks(unlock_ip, domains):
+def run_checks(unlock_ip, domains, ips):
     out = {}
-    # DNS 规则自检: 本机 CoreDNS 是否返回解锁IP
+    # DNS 规则自检(仅当 chatgpt.com 由本机负责时)
     try:
         probe = "chatgpt.com"
         probe_ip = ip_for_domain(domains, unlock_ip, probe)
-        ips = dns_query_a("127.0.0.1", probe)
-        hit = probe_ip in ips
-        out["dns"] = {"ok": hit, "detail": ("本机DNS返回: " + ",".join(ips)) if ips else "无解析结果"}
+        if probe_ip in ips:
+            got = dns_query_a("127.0.0.1", probe)
+            hit = probe_ip in got
+            out["dns"] = {"ok": hit, "detail": ("本机DNS返回: " + ",".join(got)) if got else "无解析结果"}
+        else:
+            out["dns"] = {"ok": None, "detail": "由其他节点负责"}
     except Exception as e:
         out["dns"] = {"ok": False, "detail": "DNS查询失败: %s" % e}
     for c in CHECKS:
+        check_ip = ip_for_domain(domains, unlock_ip, c["domain"])
+        if check_ip not in ips:
+            out[c["key"]] = {"ok": None, "detail": "由其他节点负责(%s)" % check_ip}
+            continue
         try:
-            check_ip = ip_for_domain(domains, unlock_ip, c["domain"])
             status, head, body = https_via(c["domain"], check_ip, c["path"])
             if c["kind"] == "code":
                 ok = status in c["ok"]
@@ -215,23 +248,26 @@ while True:
     try:
         cfg = api("/api/v1/config")
         unlock_ip = cfg.get("unlock_ip", "").strip()
-        h = hashlib.md5(json.dumps(cfg, sort_keys=True).encode()).hexdigest()
+        ips = my_ips()
+        domains_all = cfg.get("domains") or DOMAINS
+        rules = my_rules(domains_all, unlock_ip, ips) if unlock_ip else []
+        h = hashlib.md5(json.dumps({"r": rules, "w": cfg.get("whitelist", [])}, sort_keys=True).encode()).hexdigest()
         if h != last_hash:
             if unlock_ip:
                 os.makedirs(os.path.dirname(COREFILE), exist_ok=True)
                 tmp = COREFILE + ".tmp"
                 with open(tmp, "w") as f:
-                    f.write(render_corefile(unlock_ip, cfg.get("whitelist", []), cfg.get("domains") or DOMAINS))
+                    f.write(render_corefile(unlock_ip, cfg.get("whitelist", []), rules))
                 os.replace(tmp, COREFILE)
                 last_hash = h
-                print("[%s] Corefile updated (unlock_ip=%s, wl=%d)" % (time.strftime("%H:%M:%S"), unlock_ip, len(cfg.get("whitelist", []))), flush=True)
+                print("[%s] Corefile updated (mine=%d/%d rules, wl=%d)" % (time.strftime("%H:%M:%S"), len(rules), len(domains_all), len(cfg.get("whitelist", []))), flush=True)
             else:
                 print("[%s] unlock_ip not set on panel, skip" % time.strftime("%H:%M:%S"), flush=True)
         rx, tx = read_traffic()
-        payload = {"name": NAME, "rx": rx, "tx": tx}
+        payload = {"name": NAME, "rx": rx, "tx": tx, "ips": sorted(ips)}
         if unlock_ip and time.time() >= next_check:
             print("[%s] running unlock checks..." % time.strftime("%H:%M:%S"), flush=True)
-            payload["checks"] = run_checks(unlock_ip, cfg.get("domains") or DOMAINS)
+            payload["checks"] = run_checks(unlock_ip, domains_all, ips)
             next_check = time.time() + CHECK_INTERVAL
         api("/api/v1/report", payload)
     except Exception as e:

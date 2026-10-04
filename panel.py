@@ -33,6 +33,10 @@ def init():
     CREATE TABLE IF NOT EXISTS node_checks(node_id INTEGER PRIMARY KEY,
         data TEXT, ts REAL DEFAULT 0);
     """)
+    try:
+        c.execute("ALTER TABLE nodes ADD COLUMN ips TEXT DEFAULT ''")
+    except Exception:
+        pass
     c.commit(); c.close()
     if not get_setting("admin_pass"):
         env = os.environ.get("ADMIN_PASS", "changeme").strip()
@@ -106,6 +110,8 @@ async def api_report(request: Request):
         c.execute("UPDATE traffic SET rx=MAX(rx,?), tx=MAX(tx,?) WHERE node_id=? AND day=?", (rx, tx, nid, day))
     else:
         c.execute("INSERT INTO traffic VALUES(?,?,?,?)", (nid, day, rx, tx))
+    if "ips" in body:
+        c.execute("UPDATE nodes SET ips=? WHERE id=?", (",".join(body["ips"]), nid))
     if "checks" in body:
         c.execute("INSERT INTO node_checks VALUES(?,?,?) ON CONFLICT(node_id) DO UPDATE SET data=excluded.data, ts=excluded.ts",
                   (nid, json.dumps(body["checks"]), time.time()))
@@ -198,14 +204,14 @@ __MSG__
 <div class=row><span class="big-ip">__UNLOCK_SHOW__</span>
 <form method=post action=/set_unlock class=row><input name=ip value="__UNLOCK_VAL__" placeholder="解锁 VPS 的 IP" style="width:220px"><button>保存</button></form></div></div>
 
-<div class=card><h2>解锁域名 <span class=n>格式: 域名 [空格 解锁IP],不带IP走默认;自动包含子域;按顺序匹配,具体域名放泛域名前</span></h2>
+<div class=card><h2>解锁域名 <span class=n>集群模式: 域名 [空格 解锁IP]; 每台节点只回答解锁IP指向本机的域名, 其余由对应节点负责; dns.json 按组分流到各节点</span></h2>
 <form method=post action=/set_domains><textarea name=domains rows=12 placeholder="chatgpt.com&#10;netflix.com 203.0.113.5">__DOMAINS__</textarea>
 <div class=row style="margin-top:10px"><button>保存域名</button>
 <button class=ghost form=resetdoms>恢复默认</button></form>
 <form id=resetdoms method=post action=/reset_domains></form></div></div>
 
 <div class=card><h2>DNS 节点 <span class=n>共 __NN__ 台</span></h2>
-<table><thead><tr><th>ID</th><th>名称</th><th>Token</th><th>状态</th><th>最后心跳</th><th>今日流量</th><th>累计流量</th><th></th></tr></thead>
+<table><thead><tr><th>ID</th><th>名称</th><th>Token</th><th>本机IP</th><th>负责域名</th><th>状态</th><th>最后心跳</th><th>今日流量</th><th>累计流量</th><th></th></tr></thead>
 <tbody>__NODES__</tbody></table>
 <div class=row style="margin-top:12px"><b>添加节点</b>
 <form method=post action=/add_node class=row><input name=name placeholder="节点名称,如 dns-东京1" required><button>生成 Token</button></form></div></div>
@@ -244,6 +250,8 @@ def index(request: Request):
             item = data.get(key)
             if item is None:
                 tds += "<td><span class='svc unk'>未测</span></td>"
+            elif item.get("ok") is None:
+                tds += "<td><span class='svc unk' title='%s'>其他节点</span></td>" % html.escape(item.get("detail", ""))
             elif item.get("ok"):
                 detail = item.get("detail", "")
                 tds += "<td><span class='svc ok' title='%s'>%s ✓</span></td>" % (html.escape(detail), label)
@@ -270,11 +278,20 @@ def index(request: Request):
         panel_addr = host if host.startswith("http") else "http://" + host
         install_cmd = "curl -fsSL https://raw.githubusercontent.com/linglala/dnsjiesuo/main/install.sh | bash -s -- %s %s %s" % (
             n["token"], html.escape(panel_addr), html.escape(n["name"]))
-        rows += ("<tr><td>%d</td><td>%s</td><td class=mono>%s…</td><td>%s</td><td class=mono>%s</td>"
+        nips = set((n["ips"] or "").split(",")) if n["ips"] else set()
+        mine = 0
+        unlock0 = get_setting("unlock_ip")
+        for line in get_domains():
+            parts = line.split()
+            if not parts: continue
+            ip = parts[1] if len(parts) > 1 else unlock0
+            if ip in nips: mine += 1
+        ipshow = "<br>".join(html.escape(i) for i in sorted(nips)) if nips else "<span class=warn>未上报</span>"
+        rows += ("<tr><td>%d</td><td>%s</td><td class=mono>%s…</td><td class=mono>%s</td><td>%d 条</td><td>%s</td><td class=mono>%s</td>"
                  "<td>%.2f GB</td><td>%.2f GB</td>"
                  "<td><a href=/del_node/%d onclick=\"return confirm('删除该节点?')\">删除</a></td></tr>"
-                 "<tr><td></td><td colspan=7><button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this)>📋 复制一键安装命令</button> <span class=muted>在 DNS 机器上执行,自动完成全部部署</span></td></tr>"
-                 % (n["id"], html.escape(n["name"]), n["token"][:8], badge, ls, used, total, n["id"], html.escape(install_cmd, quote=True)))
+                 "<tr><td></td><td colspan=9><button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this)>📋 复制一键安装命令</button> <span class=muted>在 DNS/解锁 机器上执行,自动完成全部部署</span></td></tr>"
+                 % (n["id"], html.escape(n["name"]), n["token"][:8], ipshow, mine, badge, ls, used, total, n["id"], html.escape(install_cmd, quote=True)))
     wlrows = "".join("<tr><td class=mono>%s</td><td>%s</td><td><a href=/del_wl/%d onclick=\"return confirm('删除?')\">删除</a></td></tr>"
                      % (html.escape(w["ip"]), html.escape(w["note"] or "-"), w["id"]) for w in wl)
     wlwarn = ""
