@@ -59,9 +59,14 @@ def read_traffic():
 
 def render_corefile(unlock_ip, whitelist, domains):
     zones = " ".join('"%s"' % d for d in domains)
-    allow = "\n".join("        allow %s" % ip for ip in whitelist)
-    if not allow:
-        allow = "        allow 127.0.0.1  # 白名单为空,仅本机,请到面板添加!"
+    # 本机始终放行(供自检/本地测试),其余按面板白名单
+    lines = ["        allow 127.0.0.1"]
+    for ip in whitelist:
+        if ip not in ("127.0.0.1", "::1"):
+            lines.append("        allow %s" % ip)
+    if len(lines) == 1:
+        lines.append("        # 白名单为空,外部节点无法查询,请到面板添加")
+    allow = "\n".join(lines)
     return (COREFILE_TPL.replace("__ALLOW__", allow)
                .replace("__ZONES__", zones)
                .replace("__IP__", unlock_ip))
