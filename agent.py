@@ -21,6 +21,7 @@ CHECKS = [
 UNSUPPORTED_LOC = {"CN", "HK", "MO", "RU", "IR", "KP", "CU", "VE", "BY", "SY", "SD"}
 
 COREFILE_TPL = '''.:53 {
+    bind __BIND__
     reload
     acl {
 __ALLOW__
@@ -31,6 +32,12 @@ __TEMPLATES__
     cache 300
     errors
     log
+}
+
+# 系统专用干净 DNS(供本机 sniproxy 等解析真实域名,绕过运营商 DNS64/污染)
+.:53 {
+    bind 127.0.0.2
+    forward . tls://1.1.1.1 tls://9.9.9.9
 }
 '''
 
@@ -89,7 +96,10 @@ def render_corefile(answer_ip, whitelist, domains):
            "    template IN AAAA %s {\n"
            "        answer \"{{ .Name }} 60 IN AAAA ::\"\n"
            "    }" % (zones, answer_ip, zones)) if zones else "    # 本节点无负责域名"
-    return COREFILE_TPL.replace("__ALLOW__", allow).replace("__TEMPLATES__", tpl)
+    bind = "%s 127.0.0.1" % answer_ip
+    return (COREFILE_TPL.replace("__BIND__", bind)
+                        .replace("__ALLOW__", allow)
+                        .replace("__TEMPLATES__", tpl))
 
 def load_domains(cfg):
     """域名名单优先级: 面板下发 > 本地 /etc/dnspanel/domains.txt > 内置默认"""
