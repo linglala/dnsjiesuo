@@ -152,6 +152,9 @@ button.ghost:hover{background:#e3e6ef}
 .warn{color:var(--warn);font-size:12px}
 textarea{width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.7;resize:vertical}
 footer{text-align:center;color:var(--sub);font-size:12px;margin-top:24px}
+.copybtn{padding:4px 12px;font-size:12px;font-weight:600;background:#eef0f6;color:var(--text);border:1px solid var(--line)}
+.copybtn:hover{background:#e3e6ef}
+.copybtn.done{background:#e8f7ee;color:var(--ok);border-color:#bbe7cb}
 .login-box{max-width:360px;margin:10vh auto 0}
 .big-ip{font-family:ui-monospace,Menlo,monospace;font-weight:700;font-size:16px}
 .msg{padding:9px 13px;border-radius:8px;font-size:13px;margin-bottom:14px}
@@ -160,7 +163,22 @@ footer{text-align:center;color:var(--sub);font-size:12px;margin-top:24px}
 </style></head><body><div class=wrap>
 __BODY__
 <footer>DNS 解锁面板 v3 &middot; 每 60 秒自动刷新</footer>
-</div></body></html>"""
+</div>
+<script>
+function copyCmd(btn){
+  var t = btn.getAttribute('data-cmd');
+  function ok(){ var o=btn.textContent; btn.textContent='✓ 已复制'; btn.classList.add('done');
+    setTimeout(function(){ btn.textContent=o; btn.classList.remove('done'); },1500); }
+  function fb(){ var ta=document.createElement('textarea'); ta.value=t; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.select();
+    try{ document.execCommand('copy'); ok(); }catch(e){ prompt('复制失败,请手动复制:', t); }
+    document.body.removeChild(ta); }
+  if (navigator.clipboard && window.isSecureContext !== false) {
+    navigator.clipboard.writeText(t).then(ok, fb);
+  } else { fb(); }
+}
+</script>
+</body></html>"""
 
 def page(b): return HTMLResponse(PAGE.replace("__BODY__", b))
 
@@ -254,8 +272,8 @@ def index(request: Request):
         rows += ("<tr><td>%d</td><td>%s</td><td class=mono>%s…</td><td>%s</td><td class=mono>%s</td>"
                  "<td>%.2f GB</td><td>%.2f GB</td>"
                  "<td><a href=/del_node/%d onclick=\"return confirm('删除该节点?')\">删除</a></td></tr>"
-                 "<tr><td></td><td colspan=7 class=mono style=\"white-space:nowrap;overflow-x:auto\">一键安装: %s</td></tr>"
-                 % (n["id"], html.escape(n["name"]), n["token"][:8], badge, ls, used, total, n["id"], install_cmd))
+                 "<tr><td></td><td colspan=7><button type=button class=copybtn data-cmd=\"%s\" onclick=copyCmd(this)>📋 复制一键安装命令</button> <span class=muted>在 DNS 机器上执行,自动完成全部部署</span></td></tr>"
+                 % (n["id"], html.escape(n["name"]), n["token"][:8], badge, ls, used, total, n["id"], html.escape(install_cmd, quote=True)))
     wlrows = "".join("<tr><td class=mono>%s</td><td>%s</td><td><a href=/del_wl/%d onclick=\"return confirm('删除?')\">删除</a></td></tr>"
                      % (html.escape(w["ip"]), html.escape(w["note"] or "-"), w["id"]) for w in wl)
     wlwarn = ""
