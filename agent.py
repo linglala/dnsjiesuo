@@ -104,15 +104,25 @@ def render_corefile(answer_ip, whitelist, domains):
                         .replace("__TEMPLATES__", tpl))
 
 def load_domains(cfg):
-    """域名名单优先级: 面板下发 > 本地 /etc/dnspanel/domains.txt > 内置默认"""
-    d = cfg.get("domains")
-    if d:
-        return [x.strip() for x in d if x.strip()]
+    """域名名单 = 内置默认 ∪ 本地 domains.txt 追加项(文件只能加不能丢)"""
+    result = []
+    seen = set()
+    def add(items):
+        for it in items:
+            it = it.strip()
+            if it and not it.startswith("#") and it.split()[0] not in seen:
+                seen.add(it.split()[0])
+                result.append(it)
+    add(DOMAINS)
     try:
         with open("/etc/dnspanel/domains.txt") as f:
-            return [l.strip() for l in f if l.strip() and not l.startswith("#")]
+            add(f.readlines())
     except Exception:
-        return list(DOMAINS)
+        pass
+    d = cfg.get("domains")
+    if d:
+        add(d)
+    return result
 
 def domain_match(domains, qname):
     for d in domains:
@@ -217,12 +227,12 @@ def nf_follow(answer_ip, path, depth=0):
 def check_netflix(answer_ip):
     """双影片ID探测: 81215567(版权剧) / 80018499(自制剧测试页)"""
     try:
-        status, head, body = nf_follow(answer_ip, "/title/81215567")
+        status, head, body = nf_follow("127.0.0.1", "/title/81215567")
         region = nf_region(head)
         if status == 200:
             return {"ok": True, "detail": "完整解锁 区域:%s" % (region or "?")}
         if status in (403, 404) or b"page-404" in body or b"NSEZ-403" in body:
-            s2, h2, _ = nf_follow(answer_ip, "/title/80018499")
+            s2, h2, _ = nf_follow("127.0.0.1", "/title/80018499")
             r2 = nf_region(h2) or region
             if s2 == 200:
                 return {"ok": True, "detail": "仅自制剧 区域:%s" % (r2 or "?")}
@@ -246,6 +256,9 @@ def https_via_retry(domain, ip, path="/", tries=3, timeout=8):
     return last
 
 def run_checks(answer_ip, domains):
+    # NAT 机器连自己公网 IP 可能不通(hairpin),检测一律走本机回环,
+    # TLS 转发路径(sniproxy/nginx 监听 *:443)完全一致
+    check_ip = "127.0.0.1"
     out = {}
     try:
         probe = domains[0].split()[0] if domains else "chatgpt.com"
