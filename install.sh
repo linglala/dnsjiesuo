@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# DNS 解锁节点一键安装: 安装 CoreDNS + agent 并接入面板
+# DNS 解锁节点一键安装: 安装 CoreDNS + nginx(SNI转发) + agent 并接入面板
 # 用法: curl -fsSL https://raw.githubusercontent.com/linglala/dnsjiesuo/main/install.sh | bash -s -- <TOKEN> <面板地址> [节点名]
 set -e
 
@@ -42,7 +42,40 @@ if [ ! -f docker-compose.yml ]; then
 fi
 docker compose up -d
 
-# 3. agent
+# 3. nginx SNI 转发 (443 -> 真实站点)
+if ! command -v nginx >/dev/null 2>&1; then
+    echo "==> 安装 nginx..."
+    apt-get update -qq
+    apt-get install -y -qq nginx libnginx-mod-stream || apt-get install -y -qq nginx
+fi
+mkdir -p /etc/nginx/stream.d
+if ! grep -q "stream.d" /etc/nginx/nginx.conf 2>/dev/null; then
+    # 在主配置的 http 块之前注入 stream 配置
+    sed -i '/^http {/i stream {
+    include /etc/nginx/stream.d/*.conf;
+}' /etc/nginx/nginx.conf
+fi
+if [ ! -f /etc/nginx/stream.d/unlock.conf ]; then
+    echo "==> 写入 SNI 转发配置..."
+    cat > /etc/nginx/stream.d/unlock.conf <<'EOF'
+# DNS 解锁 SNI 转发: 按客户端 SNI 域名直连真实目标
+# resolver 必须用干净的上游(1.1.1.1), 不能用本机 CoreDNS —— 否则解锁域名
+# 会被解析回自己, 形成回环!
+stream {
+    resolver 1.1.1.1 8.8.8.8 valid=30s;
+    server {
+        listen 443;
+        ssl_preread on;
+        proxy_pass $ssl_preread_server_name:443;
+        proxy_connect_timeout 10s;
+    }
+}
+EOF
+fi
+nginx -t && systemctl restart nginx
+systemctl enable nginx 2>/dev/null || true
+
+# 4. agent
 echo "==> 部署 agent..."
 mkdir -p /etc/dnspanel
 curl -fsSL -o /etc/dnspanel/agent.py "$REPO/agent.py"
@@ -67,11 +100,13 @@ EOF
 systemctl daemon-reload
 systemctl enable --now agent
 
-# 4. 防火墙(尽力而为,不支持的系统跳过)
-(ufw allow 53/tcp && ufw allow 53/udp) 2>/dev/null || true
+# 5. 防火墙(尽力而为,不支持的系统跳过)
+(ufw allow 53/tcp && ufw allow 53/udp && ufw allow 443/tcp) 2>/dev/null || true
 
 echo ""
 echo "==> 安装完成!"
 echo "    查看日志: journalctl -u agent -f"
 echo "    Corefile: cat /etc/coredns/Corefile"
+echo "    验证:     dig @127.0.0.1 chatgpt.com +short"
+echo "              curl -sk --resolve chatgpt.com:443:\$(curl -4 -s ifconfig.me) https://chatgpt.com/cdn-cgi/trace | grep loc="
 echo "    几分钟后到面板确认该节点在线"
