@@ -50,25 +50,24 @@ if ! command -v nginx >/dev/null 2>&1; then
 fi
 mkdir -p /etc/nginx/stream.d
 if ! grep -q "stream.d" /etc/nginx/nginx.conf 2>/dev/null; then
-    # 在主配置的 http 块之前注入 stream 配置
-    sed -i '/^http {/i stream {
-    include /etc/nginx/stream.d/*.conf;
-}' /etc/nginx/nginx.conf
+    # 在主配置的 http 块之前注入 stream 配置(awk 注入,避免 sed 多行转义问题)
+    awk '/^http \{/{print "stream {"; print "    include /etc/nginx/stream.d/*.conf;"; print "}"}1' \
+        /etc/nginx/nginx.conf > /tmp/nginx.conf.new \
+        && mv /tmp/nginx.conf.new /etc/nginx/nginx.conf
 fi
 if [ ! -f /etc/nginx/stream.d/unlock.conf ]; then
     echo "==> 写入 SNI 转发配置..."
     cat > /etc/nginx/stream.d/unlock.conf <<'EOF'
 # DNS 解锁 SNI 转发: 按客户端 SNI 域名直连真实目标
+# 注意: 本文件被 include 在 nginx.conf 的 stream{} 容器内, 不要再包一层 stream{}
 # resolver 必须用干净的上游(1.1.1.1), 不能用本机 CoreDNS —— 否则解锁域名
 # 会被解析回自己, 形成回环!
-stream {
-    resolver 1.1.1.1 8.8.8.8 valid=30s;
-    server {
-        listen 443;
-        ssl_preread on;
-        proxy_pass $ssl_preread_server_name:443;
-        proxy_connect_timeout 10s;
-    }
+resolver 1.1.1.1 8.8.8.8 valid=30s;
+server {
+    listen 443;
+    ssl_preread on;
+    proxy_pass $ssl_preread_server_name:443;
+    proxy_connect_timeout 10s;
 }
 EOF
 fi
@@ -78,6 +77,29 @@ systemctl enable nginx 2>/dev/null || true
 # 4. agent
 echo "==> 部署 agent..."
 mkdir -p /etc/dnspanel
+# 种子域名表: 补 agent 内置名单没有的(Gemini扩展+流媒体), 已有文件不覆盖
+if [ ! -f /etc/dnspanel/domains.txt ]; then
+    echo "==> 写入种子域名表(流媒体+Gemini扩展)..."
+    cat > /etc/dnspanel/domains.txt <<'EOF'
+ai.google.dev
+aistudio.google.com
+accounts.google.com
+netflix.com
+netflix.ca
+netflix.net
+nflxext.com
+nflximg.com
+nflximg.net
+nflxsearch.net
+nflxso.net
+nflxvideo.net
+disneyplus.com
+disney-plus.net
+disneystreaming.com
+dssott.com
+bamgrid.com
+EOF
+fi
 curl -fsSL -o /etc/dnspanel/agent.py "$REPO/agent.py"
 
 cat > /etc/systemd/system/agent.service <<EOF
