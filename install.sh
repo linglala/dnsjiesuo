@@ -98,6 +98,12 @@ disney-plus.net
 disneystreaming.com
 dssott.com
 bamgrid.com
+play.googleapis.com
+play-fe.googleapis.com
+android.googleapis.com
+clientservices.googleapis.com
+googleapis.com
+gstatic.com
 EOF
 fi
 curl -fsSL -o /etc/dnspanel/agent.py "$REPO/agent.py"
